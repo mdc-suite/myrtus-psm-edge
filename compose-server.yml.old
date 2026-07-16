@@ -1,0 +1,32 @@
+services:
+  ssl-server:
+    build: /home/usi/scke/unified/ 
+    container_name: Test-server
+    networks: 
+      - openssl-net
+    ports:
+      - "5544:5544"
+      - "5545:5545"
+    restart: unless-stopped
+    # Entrypoint is `openssl`, command contains the parameters to be passed to it
+    command: /app/server
+    tty: true 
+    stdin_open: true
+    cap_add:
+      - NET_ADMIN 
+      - CAP_NET_RAW 
+    privileged: true
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${HOME}/.Xauthority:/root/.Xauthority:rw
+    environment:
+      - DISPLAY=unix$DISPLAY
+
+
+
+networks:
+  openssl-net:
+    driver: bridge
+
+
+
