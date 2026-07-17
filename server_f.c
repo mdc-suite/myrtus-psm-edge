@@ -22,6 +22,9 @@
 #include <stdbool.h>  
 #include <sys/types.h>
 #include <dirent.h>
+
+#include "cycles.h" # al3monni mod
+
 #define fbits(y)  ((y) & 0xc0)>>6
 #define sbits(y)  ((y) & 0x30)>>4
 #define ibits(y)  ((y) & 0x0f) 
@@ -89,14 +92,15 @@ unsigned char* read_unknown_stream(SSL *ssl, size_t *total_len) {
     return full_buffer;
 }
  volatile int mode=98;
- extern inline __attribute__((always_inline)) unsigned long rdtscp()
+// al3monni mod
+/*  extern inline __attribute__((always_inline)) unsigned long rdtscp()
 {
    unsigned long a, d, c;
 
    __asm__ volatile("rdtscp" : "=a" (a), "=d" (d), "=c" (c));
 
    return (a | (d << 32));
-}
+} */
 void handleErrors(void)
 {
     unsigned long errCode;

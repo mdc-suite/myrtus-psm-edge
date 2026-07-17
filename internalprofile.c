@@ -5,6 +5,9 @@
 #include <dlfcn.h>
 #include <math.h>
 #include"header.h"
+
+#include "cycles.h" # al3monni mod
+
 #define ITER 50000
 
 void calc( unsigned char *key, unsigned char *pt, unsigned char *ct, 
@@ -13,14 +16,15 @@ void calc( unsigned char *key, unsigned char *pt, unsigned char *ct,
     op(key,pt,ct);
 }
 
-extern inline __attribute__((always_inline)) unsigned long rdtscp()
+// al3monni mod
+/* extern inline __attribute__((always_inline)) unsigned long rdtscp()
 {
    unsigned long a, d, c;
 
    __asm__ volatile("rdtscp" : "=a" (a), "=d" (d), "=c" (c));
 
    return (a | (d << 32));
-}
+} */
 
 long int readreg(char *a)
 {
