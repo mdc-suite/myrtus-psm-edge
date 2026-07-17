@@ -1,0 +1,5 @@
+.git
+.gitignore
+*.orig
+*.rescued
+likwid-5.5.1.tar.gz

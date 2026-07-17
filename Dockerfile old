@@ -22,21 +22,8 @@ WORKDIR /app
 COPY . .
 ENV LD_LIBRARY_PATH=:$PWD/LIB
 RUN wget http://ftp.fau.de/pub/likwid/likwid-5.5.1.tar.gz
-#RUN tar -xaf likwid-5.5.1.tar.gz && cd likwid-5.5.1 && make && make install #old subhadeep line
-# --- al3monni mod to arm integration ---
-ARG TARGETARCH
-RUN tar -xaf likwid-5.5.1.tar.gz \
- && cd likwid-5.5.1 \
- && if [ "$TARGETARCH" = "arm64" ]; then \
-      sed -i -e 's|^COMPILER *=.*|COMPILER = GCCARMv8#NO SPACE|' \
-             -e 's|^ACCESSMODE *=.*|ACCESSMODE = perf_event#NO SPACE|' \
-             -e 's|^BUILDDAEMON *=.*|BUILDDAEMON = false#NO SPACE|' \
-             -e 's|^BUILDFREQ *=.*|BUILDFREQ = false#NO SPACE|' \
-             config.mk \
-      && grep -E '^(COMPILER|ACCESSMODE|BUILDDAEMON|BUILDFREQ)' config.mk ; \
-    fi \
- && make && make install
- # --- al3monni mod finish ---
+RUN tar -xaf likwid-5.5.1.tar.gz && cd likwid-5.5.1 && make && make install
+ 
  
 RUN gcc reset.c -o reset
 RUN gcc -o generate gen.c
