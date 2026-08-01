@@ -5,8 +5,10 @@ FROM ubuntu:26.04 AS build-env
 
 RUN DEBIAN_FRONTEND=noninteractive \
   apt-get update \
-  && apt-get install -y gcc \
-  && apt-get install -y make \
+  #al3monni edit
+  && apt-get install -y build-essential \
+  #&& apt-get install -y gcc \ #old lines
+  #&& apt-get install -y make \ #old lines
   && apt-get install -y openssl \
   && apt-get install -y libssl-dev \
   && apt-get install -y lsof \
@@ -14,7 +16,8 @@ RUN DEBIAN_FRONTEND=noninteractive \
   && apt-get install -y wget \
   && apt-get install -y perl \
   && rm -rf /var/lib/apt/lists/*
- 
+
+  
 #RUN gcc --version
 # change directory to /app
 WORKDIR /app
