@@ -1,6 +1,7 @@
 services:
   ssl-server:
     build: .                  # was: /home/usi/scke/unified/
+    platform: linux/arm64     # al3monni mod for arm porting
     container_name: Test-server
     networks:
       - openssl-net
