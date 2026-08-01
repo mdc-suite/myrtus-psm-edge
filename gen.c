@@ -173,7 +173,17 @@ int main(int argc, char **argv)
    
    //run profiler
    sprintf(com1, "./profile %d %d %d",slevel,h,cpu);
-   rt=system(com1);
+
+   
+   //rt=system(com1); //old command
+
+   //al3monni mod start
+    #if defined(__aarch64__)
+        rt = 0;   // al3monni: skip likwid profiling on aarch64 (hangs under QEMU, MSR/energy unavailable on Kria too). Force success so header.h manifest below still updates.
+    #else
+        rt=system(com1);
+    #endif
+    //al3monni mod end
  
    if(!rt){
    
