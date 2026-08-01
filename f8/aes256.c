@@ -3,11 +3,11 @@
 
 // ---- AES-256 key expansion (portable C, FIPS-197) ----
 // Produces the same 240-byte (15 round key) schedule as the AES-NI version,
-// so ciphertext is bit-identical. AES-256 (Nk=8) applies SubWord+RotWord+Rcon
+// so ciphertext is bit-identical. AES-256 (Nk=8) applies SubWord+RotWord+f8_rcon
 // on words where i%8==0, and an EXTRA SubWord (no rotate) on words where
 // i%8==4 -- that second case is the aes256-specific step.
 
-static const uint8_t sbox[256] = {
+static const uint8_t f8_sbox[256] = {
 0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
 0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,
 0xb7,0xfd,0x93,0x26,0x36,0x3f,0xf7,0xcc,0x34,0xa5,0xe5,0xf1,0x71,0xd8,0x31,0x15,
@@ -25,7 +25,7 @@ static const uint8_t sbox[256] = {
 0xe1,0xf8,0x98,0x11,0x69,0xd9,0x8e,0x94,0x9b,0x1e,0x87,0xe9,0xce,0x55,0x28,0xdf,
 0x8c,0xa1,0x89,0x0d,0xbf,0xe6,0x42,0x68,0x41,0x99,0x2d,0x0f,0xb0,0x54,0xbb,0x16 };
 
-static const uint8_t Rcon[8] = {0x00,0x01,0x02,0x04,0x08,0x10,0x20,0x40};
+static const uint8_t f8_rcon[8] = {0x00,0x01,0x02,0x04,0x08,0x10,0x20,0x40};
 
 // Expand 32-byte key into 240 bytes (15 round keys) for AES-256.
 static void key_expansion_256(const uint8_t *key, uint8_t rk[240]) {
@@ -37,13 +37,13 @@ static void key_expansion_256(const uint8_t *key, uint8_t rk[240]) {
         for (int i = 0; i < 4; i++) t[i] = rk[bytes - 4 + i];
         int word = bytes / 4;          // index of the word being generated
         if (word % 8 == 0) {
-            // RotWord + SubWord + Rcon
+            // RotWord + SubWord + f8_rcon
             uint8_t tmp = t[0]; t[0]=t[1]; t[1]=t[2]; t[2]=t[3]; t[3]=tmp;
-            for (int i = 0; i < 4; i++) t[i] = sbox[t[i]];
-            t[0] ^= Rcon[rconi++];
+            for (int i = 0; i < 4; i++) t[i] = f8_sbox[t[i]];
+            t[0] ^= f8_rcon[rconi++];
         } else if (word % 8 == 4) {
-            // AES-256 extra step: SubWord only (no rotate, no Rcon)
-            for (int i = 0; i < 4; i++) t[i] = sbox[t[i]];
+            // AES-256 extra step: SubWord only (no rotate, no f8_rcon)
+            for (int i = 0; i < 4; i++) t[i] = f8_sbox[t[i]];
         }
         for (int i = 0; i < 4; i++) {
             rk[bytes] = rk[bytes - 32] ^ t[i];
