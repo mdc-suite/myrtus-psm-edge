@@ -5,7 +5,7 @@ CC           = gcc
 LD           = ld
 AR           = ar
 ARFLAGS      = rcs
-CFLAGS       = -c -fPIC -march=armv8-a+crypto
+CFLAGS       = -c -fPIC -maes -msse4.1
  
  
  
