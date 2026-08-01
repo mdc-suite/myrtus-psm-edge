@@ -5,8 +5,7 @@ CC           = gcc
 LD           = ld
 AR           = ar
 ARFLAGS      = rcs
-#CFLAGS       = -c -fPIC -maes -msse4.1			# old code
-CFLAGS       = -c -fPIC -march=armv8-a+crypto	# al3monni mod
+CFLAGS       = -c -fPIC -maes -msse4.1
  
  
  
