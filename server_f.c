@@ -23,7 +23,7 @@
 #include <sys/types.h>
 #include <dirent.h>
 
-#include "cycles.h" # al3monni mod
+#include "cycles.h" // al3monni mod
 
 #define fbits(y)  ((y) & 0xc0)>>6
 #define sbits(y)  ((y) & 0x30)>>4
