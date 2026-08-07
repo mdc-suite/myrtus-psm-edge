@@ -1,5 +1,5 @@
 # al3monni mod to suggested os for kria
-FROM ubuntu:22.04 AS build-env
+FROM kria-base:22.04 AS build-env
 # install build-base meta package inside build-env container
 
 
