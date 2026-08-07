@@ -1,5 +1,5 @@
-# use alpine as base image
-FROM ubuntu:26.04 AS build-env
+# al3monni mod to suggested os for kria
+FROM ubuntu:22.04 AS build-env
 # install build-base meta package inside build-env container
 
 
@@ -38,7 +38,7 @@ RUN tar -xaf likwid-5.5.1.tar.gz \
  && make && make install
 
 ENV LD_LIBRARY_PATH=:/app/LIB
- # --- al3monni mod finish ---
+# --- al3monni mod finish ---
 
 # copy all files from current directory inside the build-env container
 COPY . .
@@ -57,9 +57,6 @@ RUN gcc send1.c -o send
 
 RUN chmod 777 start.sh
 # use another container to run the program
-
-
- 
 
 
 ENTRYPOINT ["/app/start.sh"]
