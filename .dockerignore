@@ -1,5 +1,36 @@
+# ---- version control / docs ----
 .git
 .gitignore
-*.orig
-*.rescued
-likwid-5.5.1.tar.gz
+*.md
+
+# ---- build artefacts: regenerated at container start by start.sh ----
+# NOTE: LIB/ is excluded wholesale (the committed .o/.so are stale x86-64
+# artefacts). The Dockerfile must therefore mkdir it — see below.
+LIB/
+*.o
+*.a
+test1.c
+test2.c
+header1.h
+
+# ---- built binaries (rebuilt by make inside the image) ----
+server
+client
+register
+reset
+profile
+profile01
+internalprofile
+gen
+synthesize
+
+# ---- host / editor cruft ----
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# ---- compose files (not part of the build context) ----
+compose-*.yml
+docker-compose*.yml
