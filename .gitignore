@@ -1,0 +1,21 @@
+# build artefacts regenerated inside the container by start.sh
+LIB/
+*.o
+*.a
+
+# binaries built by make
+server
+client
+register
+reset
+profile
+profile01
+internalprofile
+gen
+synthesize
+
+# transient files written by register/gen at runtime
+test1.c
+test2.c
+header1.h
+stabpresent.txt

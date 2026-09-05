@@ -47,7 +47,7 @@ COPY . .
 #RUN wget http://ftp.fau.de/pub/likwid/likwid-5.5.1.tar.gz                    #old subhadeep line
 #RUN tar -xaf likwid-5.5.1.tar.gz && cd likwid-5.5.1 && make && make install  #old subhadeep line
 
- RUN mkdir -p /app/LIB
+RUN mkdir -p /app/LIB
 RUN gcc reset.c -o reset
 RUN gcc -o generate gen.c
 RUN gcc -o register register.c
