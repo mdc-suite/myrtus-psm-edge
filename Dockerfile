@@ -1,17 +1,12 @@
 # al3monni/kria-ubuntu:22.04.5 is a custom docker image
 # based on ubuntu 22.04.5 IotT with kria tools and libraries pre-installed
-
 FROM al3monni/kria-ubuntu:22.04.5 AS build-env
 
-
-# install build-base meta package inside build-env container
-
+# install build-essential, openssl, libssl-dev, lsof, iputils-ping, wget, perl
+# buld-essential meta package includes gcc, g++, make, libc-dev, etc.
 RUN DEBIAN_FRONTEND=noninteractive \
   apt-get update \
-  #al3monni edit
   && apt-get install -y build-essential \
-  #&& apt-get install -y gcc \ #old lines
-  #&& apt-get install -y make \ #old lines
   && apt-get install -y openssl \
   && apt-get install -y libssl-dev \
   && apt-get install -y lsof \
@@ -20,13 +15,13 @@ RUN DEBIAN_FRONTEND=noninteractive \
   && apt-get install -y perl \
   && rm -rf /var/lib/apt/lists/*
 
-  
-#RUN gcc --version
-# change directory to /app
+# set the working directory inside the build-env container
 WORKDIR /app
 
-# --- al3monni mod to arm integration ---
+# set the TARGETARCH build argument to the architecture of the target platform
 ARG TARGETARCH
+
+# download and build likwid-5.5.1 from source
 RUN wget http://ftp.fau.de/pub/likwid/likwid-5.5.1.tar.gz
 RUN tar -xaf likwid-5.5.1.tar.gz \
  && cd likwid-5.5.1 \
@@ -41,14 +36,9 @@ RUN tar -xaf likwid-5.5.1.tar.gz \
  && make && make install
 
 ENV LD_LIBRARY_PATH=:/app/LIB
-# --- al3monni mod finish ---
 
 # copy all files from current directory inside the build-env container
 COPY . .
-
-#ENV LD_LIBRARY_PATH=:$PWD/LIB                                                #old subhadeep line
-#RUN wget http://ftp.fau.de/pub/likwid/likwid-5.5.1.tar.gz                    #old subhadeep line
-#RUN tar -xaf likwid-5.5.1.tar.gz && cd likwid-5.5.1 && make && make install  #old subhadeep line
 
 RUN mkdir -p /app/LIB
 RUN gcc reset.c -o reset
@@ -59,10 +49,11 @@ RUN make server
 RUN make -f makeclient
 RUN gcc send1.c -o send
 
+# set permissions for start.sh script
 RUN chmod 777 start.sh
-# use another container to run the program
 
-
+# set the entrypoint to start.sh script
 ENTRYPOINT ["/app/start.sh"]
-# at last run the program
+
+# set the default command to run when the container starts
 CMD ["/app/start.sh"] 

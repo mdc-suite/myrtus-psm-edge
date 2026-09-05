@@ -1,31 +1,26 @@
-# myrtus-psm-edge — Privacy and Security Manager (Edge Layer)
+# Porting logbook — myrtus-psm-edge
 
-Crypto-agile TLS prototype with eight runtime-selectable AES backends, benchmarked for performance and energy on ARM64 edge hardware. Component of the **MYRTUS** project (Horizon Europe, Grant No. 101135183).
+This document records **every** modification required to take the project from the upstream x86-only state to a working, hardware-validated aarch64 deployment on the Kria KV260. It is a chronological record of what broke and why, not a usage guide — for installation, build and validation instructions see [`README.md`](README.md).
 
 **Repo:** https://github.com/mdc-suite/myrtus-psm-edge
 **Upstream:** https://github.com/subhadeep-banik/spdocker
 **Port branch:** `al3monni-test-arm` · **x86 baseline:** `al3monni-test` (`ddb5f5f`)
-**Target hardware:** AMD/Xilinx Kria KR260 — Zynq UltraScale+ MPSoC, 4× Cortex-A53, aarch64
+**Target hardware:** AMD/Xilinx Kria KV260 — Zynq UltraScale+ MPSoC, 4× Cortex-A53, aarch64
 **Cross-build host:** Windows + WSL2 (Ubuntu) + Docker Desktop, `linux/arm64` under QEMU
 **On-board host:** Ubuntu 22.04 IoT, Docker Engine, native aarch64 build
 **Base image:** [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu) (arm64/v8) — see §11
-**Status:** ✅ **Validated on real silicon.** Builds, registers all 8 implementations,
-serves over TLS, and round-trips byte-identical (`cmp`) on the Kria KR260.
-⚠️ Energy profiling disabled — see §9.
+**Status:** ✅ **Validated on real silicon.** Builds, registers all 8 implementations, serves over TLS, and round-trips byte-identical (`cmp`) on the Kria KV260. ⚠️ Energy profiling disabled — see §9.
 
-> Derived from [spdocker](https://github.com/subhadeep-banik/spdocker) by Subhadeep Banik.
-> This document reconstructs **every** modification required to take the project from the
-> upstream x86-only state to a working, hardware-validated aarch64 deployment. Changes needed
-> to build on x86 are marked **[baseline]**; ARM-specific changes **[arm]**; changes that
-> emerged only on real hardware **[hw]**.
-> Board bring-up (flashing, networking, Docker install) is documented separately in
-> [`KRIA_KV260_DEPLOYMENT.md`](KRIA_KV260_DEPLOYMENT.md).
+> Derived from [spdocker](https://github.com/subhadeep-banik/spdocker) by Subhadeep Banik. Changes needed to build on x86 are marked **[baseline]**; ARM-specific changes **[arm]**; changes that emerged only on real hardware **[hw]**.
+> Board bring-up (flashing, networking, Docker install) is documented separately in [`KRIA_KV260_DEPLOYMENT.md`](KRIA_KV260_DEPLOYMENT.md).
 
 ---
 
 ## 1. What this project is
 
 A TLS client/server shipping **8 interchangeable AES implementations**. At runtime the server selects one, loads it from a shared library via `dlopen`/`dlsym`, and uses it as the AEAD for file transfer. Selection is nominally driven by measured throughput/energy against a policy file.
+
+As the **Privacy and Security Manager** of the MYRTUS edge layer, the component demonstrates *crypto-agility*: the cipher backing a secure channel is not fixed at compile time but chosen at runtime, so the security/performance/energy trade-off can be renegotiated as conditions on the node change.
 
 Container-start pipeline (`start.sh`):
 
@@ -39,8 +34,7 @@ reset  →  register ×8  →  gcc -shared ./LIB/*.o -o ./LIB/lib_enc.so  →  .
 
 The **registration order is the numbering contract** — client and server must agree on it, or the same mode byte selects different ciphers on each side (see §8).
 
-
-Both the x86-64 baseline and the aarch64 port are validated end-to-end by a byte-identical `cmp` on a 10000-byte file transfer; the aarch64 path has been re-validated on the Kria KR260 itself, not only under emulation.
+Both the x86-64 baseline and the aarch64 port are validated end-to-end by a byte-identical `cmp` on a 10000-byte file transfer; the aarch64 path has been re-validated on the Kria KV260 itself, not only under emulation.
 
 ---
 
@@ -50,8 +44,7 @@ Both the x86-64 baseline and the aarch64 port are validated end-to-end by a byte
 
 **(b) Architecture faults [arm].** Once it builds on x86, the aarch64 cross-build exposes: likwid compiling its x86 access layer; four copies of x86 `rdtscp` inline asm; a vestigial `-l_enc` link against a committed x86 `.so`; the likwid profiler hanging under QEMU and corrupting the manifest; and f7/f8 using x86 AES-NI intrinsics and flags. All addressed in §4, and subsequently confirmed on native aarch64 hardware — none of the fixes were artefacts of emulation.
 
-A third class — **energy instrumentation** — turned out not to be a port bug at all but an
-architectural dead end, and is treated separately in §9.
+A third class — **energy instrumentation** — turned out not to be a port bug at all but an architectural dead end, and is treated separately in §9.
 
 ---
 
@@ -64,10 +57,10 @@ AES-128 KAT template, security level 1 (used by f1, f2, f3, f7). The marker line
 Same, security level 2 (f4, f5, f6, f8). AES-256-ECB vector from NIST SP 800-38A. Identical structure to M-B1 with the 32-byte key and the AES-256 expected ciphertext.
 
 ### M-B3 — `compose-server.yml` path & X11 [baseline, mandatory]
-Replace the author's hardcoded `build: /home/usi/scke/unified/` with `build: .`; delete the `volumes:` X11 mounts (`/tmp/.X11-unix`, `${HOME}/.Xauthority`) and the `DISPLAY` environment line — none exist under WSL2.
+Replace the author's hardcoded `build: /home/usi/scke/unified/` with `build: .`; delete the `volumes:` X11 mounts (`/tmp/.X11-unix`, `${HOME}/.Xauthority`) and the `DISPLAY` environment line — none exist under WSL2, and none are needed on the Kria board either.
 
 ### M-B4 — `.dockerignore` [baseline]
-Added to keep build context small and avoid copying host cruft into the image.
+Added to keep the build context small and avoid copying host cruft into the image. This matters more on the board than on the dev host: build context is transferred on every `docker compose up --build`, and the board's I/O is a microSD card.
 
 ---
 
@@ -94,16 +87,14 @@ RUN tar -xaf likwid-5.5.1.tar.gz \
 
 - `GCCARMv8` makes likwid's top-level Makefile `filter-out` the x86 MSR/rdpmc objects and build `./GCCARMv8/` instead of `./GCC/`.
 - `ACCESSMODE = perf_event` avoids the MSR access daemon (x86-only; MSRs are unavailable on both WSL2 and Kria). On the **real Cortex-A53 PMU** `perf_event` is also the correct mechanism to read cycles/instructions/cache counters.
-- Rationale for patching rather than stubbing likwid: keeps `#include <likwid.h>` /
-  `-llikwid` resolving and keeps the diff against the x86 baseline honest.
+- Rationale for patching rather than stubbing likwid: keeps `#include <likwid.h>` / `-llikwid` resolving and keeps the diff against the x86 baseline honest.
 
-> **Scope of what this buys.** `likwid-perfctr` (performance counters) works on ARMv8 with
-> this configuration. `likwid-powermeter` does **not**, on any ARM part — see §9.
+> **Scope of what this buys.** `likwid-perfctr` (performance counters) works on ARMv8 with this configuration. `likwid-powermeter` does **not**, on any ARM part — see §9.
 
 ### M-A2 — Dockerfile layer reorder (cache) [arm] · `Dockerfile` · commit `d01abde`
 Moved the likwid `wget` + build block **above** `COPY . .`. The likwid layer is ~800 s under QEMU; before the reorder, any source edit busted it and every cycle paid the full cost. After: likwid is a stable early layer, and source edits resume from `COPY . .` (~seconds). This single reorder is what makes the edit/build loop tolerable.
 
-On the board the same reorder still pays off, though less dramatically — the native A53 build of likwid is far faster than the emulated one, but it is still the longest layer and still worth keeping out of the edit loop.
+On the board the same reorder still pays off, though less dramatically — the native A53 build of likwid takes ~370 s, far faster than the emulated one, but it is still the longest layer and still worth keeping out of the edit loop.
 
 ### M-A3 — portable cycle counter [arm] · new file `cycles.h`
 **Symptom:** four files define `rdtscp()` with x86 inline asm (`"=a"/"=d"/"c"` constraints) that aarch64 gcc cannot satisfy.
@@ -237,17 +228,12 @@ After this the compose banner reads `platform: debian-arm64`.
 > **Note on service vs. container name** — the compose *service* is `ssl-server`, the *container* is `Test-server`. `docker compose` subcommands take the former, `docker exec` and `docker logs` take the latter. They are not interchangeable, and mixing them up produces a confusing "no such service/container" error.
 
 ### M-A12 — `build-essential` instead of `gcc` [hw] · `Dockerfile` · `e5edc89`
-**Symptom:** the build fails on a missing `libc6-dev`, and `make` is absent.
-**Cause:** the Dockerfile installed `gcc` alone. On a minimal base that pulls the compiler binary without the C library headers it needs, and without `make` at all — dependencies that a fuller image would have satisfied incidentally.
-**Fix:** replace `gcc` with `build-essential` in the `apt-get install` line. This is the class of failure that appears whenever the base gets leaner: packages that were previously present as transitive dependencies of something else have to be requested explicitly.
-
-### M-A12 — `build-essential` instead of `gcc` [hw] · `Dockerfile` · `e5edc89`
 **Symptom:** the build fails on a missing `libc6-dev`, and `make` is not found.
 **Cause:** the Dockerfile installed `gcc` alone, which pulls the compiler binary without the C library headers it needs and without `make` at all. On a fuller base these arrived as transitive dependencies of something else; on a minimal one they have to be requested explicitly.
 **Fix:** replace `gcc` with `build-essential` in the `apt-get install` line.
 
 ### M-A13 — align the base image with the board's Ubuntu release [hw] · `Dockerfile` · `aaf1af7`
-Moved the base to Ubuntu 22.04, matching the release running on the Kria board (Ubuntu 22.04.5 IoT). Aligning the container's userspace with the host's avoids glibc and toolchain version skew between what the code is compiled against and what the board actually runs. Superseded by §11, which replaces the stock image with a snapshot of the board itself.
+Moved the base to Ubuntu 22.04, matching the release running on the Kria board (Ubuntu 22.04 IoT). Aligning the container's userspace with the host's avoids glibc and toolchain version skew between what the code is compiled against and what the board actually runs. Superseded by §11, which replaces the stock image with a snapshot of the board itself.
 
 ---
 
@@ -285,7 +271,7 @@ grep -o 'aes\|pmull\|sha1\|sha2' /proc/cpuinfo | sort -u
 
 All four must appear, or f7/f8 (M-A8/M-A9) will not have the instructions they compile against.
 
-5. **Disk headroom on the microSD.** The base image alone (§6b) is several GB before any application layer is built on top.
+5. **Disk headroom on the microSD.** The base image (§11) is a couple of GB compressed and several more unpacked, before any application layer is built on top.
 
 Not needed on the board: buildx, binfmt/QEMU registration, and any `--platform` flag.
 
@@ -293,9 +279,9 @@ Not needed on the board: buildx, binfmt/QEMU registration, and any `--platform` 
 
 ## 6. Full build & run
 
-#### 6a. Cross-build on WSL2
+### 6a. Cross-build on WSL2
 
-Since the base image is itself the Kria arm64 rootfs (§6b), the cross-build pulls it through QEMU. This works — buildx handles the arm64 base natively — but the first build is substantially heavier than it was against a stock `ubuntu` base: several GB of image to fetch before any layer is compiled, all subsequent compilation emulated.
+Since the base image is itself the Kria arm64 rootfs (§11), the cross-build pulls it through QEMU. This works — buildx handles the arm64 base natively — but the first build is substantially heavier than it was against a stock `ubuntu` base: several GB of image to fetch before any layer is compiled, all subsequent compilation emulated.
 
 ```bash
 cd ~/myrtus/myrtus-psm-edge
@@ -326,10 +312,10 @@ git clone https://github.com/mdc-suite/myrtus-psm-edge.git
 cd myrtus-psm-edge
 git checkout al3monni-test-arm
 
-sudo docker compose -f compose-server.yml up --build
+docker compose -f compose-server.yml up --build
 ```
 
-The first build pulls the base image (several GB, §6b-note) and compiles likwid natively; subsequent builds resume from the `COPY . .` layer thanks to M-A2.
+Reference timings from a clean build on the KV260: ~135 s for the `apt-get` layer, ~371 s for likwid, ~600 s total. Subsequent builds resume from the `COPY . .` layer thanks to M-A2.
 
 ### Pass conditions in the log (both paths)
 
@@ -365,30 +351,39 @@ docker exec Test-server sh -c 'lsof -i -P -n | grep LISTEN'       # *:5544, *:55
 
 ### End-to-end round trip
 
-The authoritative correctness test is a file transfer compared byte for byte. `rfile` (10000 bytes of repeating ASCII) is committed in the repo for this purpose:
+The authoritative correctness test is a file transfer compared byte for byte. `rfile` (10000 bytes) is committed in the repo for this purpose.
 
 ```bash
-cmp rfile <received-file>     # no output means identical
+docker exec -it Test-server sh -c 'cd /app && ./client -s 1 -i 127.0.0.1:5544 -f rfile'
+```
+
+Expected on success: handshake completes, then `Entire File Sent 10016 bytes` — 10000 bytes of payload plus the 16-byte AEAD tag.
+
+The server writes the received file to `/app/Downloads/filename-ekm<N>`, where `<N>` is derived from the TLS session's exported keying material and therefore **changes on every connection**. List the directory to find the current name, then compare:
+
+```bash
+docker exec Test-server sh -c 'cd /app && ls -l Downloads/'
+docker exec Test-server sh -c 'cd /app && cmp rfile Downloads/filename-ekm<N> && echo IDENTICAL'
 ```
 
 `cmp` is the test that matters. The server's own byte counter is unreliable (§9, issue 3), so a plausible-looking log line is not evidence of a correct transfer; only `cmp` is.
 
 ### Reference baseline
 
-| Check | Expected | aarch64 (QEMU) | Kria KR260 |
+| Check | Expected | aarch64 (QEMU) | Kria KV260 |
 |---|---|---|---|
 | OpenSSL banner | `platform: debian-arm64` | ✅ | ✅ |
 | `LIB/` contents | 8 × `enc_s0*.o` + `lib_enc.so` | ✅ | ✅ |
 | `nm -D` | `enc_s01_n01`..`n04`, `enc_s02_n01`..`n04`, all `T` | ✅ | ✅ |
 | `header.h` | `///1-04`, `///2-04` | ✅ | ✅ |
 | f1–f8 registration | exit 0, 0 symbol clashes, 0 KAT failures | ✅ | ✅ |
-| Round-trip (10000 B) | `10016 bytes` on the wire (10000 + 16-byte AEAD tag) | ✅ | ✅ |
+| Round-trip (10000 B) | `10016 bytes` on the wire | ✅ | ✅ |
 | `cmp` | identical | ✅ | ✅ |
 | Crypto extensions in `/proc/cpuinfo` | `aes pmull sha1 sha2` | n/a | ✅ |
 
 Everything that passed under emulation also passes on the silicon: no part of the port was an artefact of QEMU.
 
-> **x86-64 baseline status.** The table above covers the aarch64 paths only. The x86-64 baseline was last validated end-to-end at commit `ddb5f5f` (branch `al3monni-test`) and has not been re-run since; the ARM work has diverged considerably from it in the meantime. Re-validating x86-64 against the current tree — in particular against the new base image — is open work.
+> **x86-64 baseline status.** The table above covers the aarch64 paths only. The x86-64 baseline was last validated end-to-end at commit `ddb5f5f` (branch `al3monni-test`) and has not been re-run since; the ARM work has diverged considerably from it in the meantime, including the base image change. Re-validating x86-64 against the current tree is open work.
 
 ---
 
@@ -427,6 +422,7 @@ The f2/f5 `.s`-assembly concern from the original scope was resolved by observat
 Symbol coexistence works because `gen.c`→`generate` wraps each implementation: `#define <fn> enc_sXX_nYY` + `#include` → `gcc -E -P` → fully-preprocessed `source.c` → object renamed into `LIB/`. That is why eight implementations with (previously) identical internal function names can share one `.so` — and why the f7/f8 *global tables* still needed the M-A10 rename, since globals survive preprocessing untouched.
 
 On the Kria, f7 and f8 are the two backends that exercise the A53's crypto extensions; the other six are portable C. That split is the whole point of the comparison the energy layer (§9) is meant to quantify.
+
 ---
 
 ## 9. Known issues & remaining work
@@ -486,7 +482,7 @@ Oldest first. `git log --oneline --graph al3monni-test-arm` is the authoritative
 | `bb4ce8c` | add `.gitignore`; untrack generated `test1.c`/`test2.c` | — |
 | `66baa82` | Dockerfile: base image to `al3monni/kria-ubuntu:22.04.5` — snapshot rebuilt from a freshly flashed, fully upgraded board after the first one was found to be missing `/tmp` and `/run` | §11 |
 
-The ARM work falls into four phases: **make it build** (`9207e41` … `c992b51`), **make it register and run correctly** (`af69ca9` … `9a902ab`), **move it onto the board's own userspace** (`e5edc89` … `ad1385f`), and **clean up and correct the base** (`dc78a00` … `66baa82`)..
+The ARM work falls into four phases: **make it build** (`9207e41` … `c992b51`), **make it register and run correctly** (`af69ca9` … `9a902ab`), **move it onto the board's own userspace** (`e5edc89` … `ad1385f`), and **clean up and correct the base** (`dc78a00` … `66baa82`).
 
 ---
 
