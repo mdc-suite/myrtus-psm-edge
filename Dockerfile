@@ -1,7 +1,10 @@
-# al3monni mod to suggested os for kria
-FROM kria-base:22.04 AS build-env
-# install build-base meta package inside build-env container
+# al3monni/kria-ubuntu:22.04.5 is a custom docker image
+# based on ubuntu 22.04.5 IotT with kria tools and libraries pre-installed
 
+FROM al3monni/kria-ubuntu:22.04.5 AS build-env
+
+
+# install build-base meta package inside build-env container
 
 RUN DEBIAN_FRONTEND=noninteractive \
   apt-get update \
