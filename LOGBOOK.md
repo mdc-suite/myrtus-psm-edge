@@ -89,7 +89,7 @@ RUN tar -xaf likwid-5.5.1.tar.gz \
 - `ACCESSMODE = perf_event` avoids the MSR access daemon (x86-only; MSRs are unavailable on both WSL2 and Kria). On the **real Cortex-A53 PMU** `perf_event` is also the correct mechanism to read cycles/instructions/cache counters.
 - Rationale for patching rather than stubbing likwid: keeps `#include <likwid.h>` / `-llikwid` resolving and keeps the diff against the x86 baseline honest.
 
-> **Scope of what this buys.** `likwid-perfctr` (performance counters) works on ARMv8 with this configuration. `likwid-powermeter` does **not**, on any ARM part — see §9.
+> **Scope of what this buys.** The energy path uses likwid-perfctr -g ENERGY. LIKWID's ENERGY performance group is defined in terms of x86 RAPL events, and no equivalent group is shipped or definable for the arm8 architecture, because ARMv8 PMUv3 exposes no energy counters and LIKWID's ARM backend can only reach counters visible through perf_event. The call therefore fails with Cannot read performance group ENERGY on any ARM part.
 
 ### M-A2 — Dockerfile layer reorder (cache) [arm] · `Dockerfile` · commit `d01abde`
 Moved the likwid `wget` + build block **above** `COPY . .`. The likwid layer is ~800 s under QEMU; before the reorder, any source edit busted it and every cycle paid the full cost. After: likwid is a stable early layer, and source edits resume from `COPY . .` (~seconds). This single reorder is what makes the edit/build loop tolerable.
