@@ -78,19 +78,34 @@ The board gets its network through Internet Connection Sharing on the Windows ho
 
 On Windows, open `ncpa.cpl`, right-click the adapter that has internet access (Wi-Fi, typically), choose **Properties → Sharing**, and enable *Allow other network users to connect through this computer's Internet connection*, selecting the Ethernet adapter connected to the board as the home networking connection.
 
-On the board, check whether an address has been assigned:
+On the board, check the assigned address:
 
 ```bash
 ip a show eth0
 ```
 
-You are looking for an `inet 192.168.137.x`. If there is none, request one:
+### Assign a static IP (recommended)
+
+ICS also runs a DHCP server that hands the board an address, but it is not reliable: after a while — typically once Windows sleeps, reboots or changes network — it stops answering, the board's lease expires without being renewed, `eth0` drops its IPv4 address and SSH stops working.
+
+To avoid this, give the board a fixed address in the ICS subnet **the first time you log in**, from the serial console. First find the name NetworkManager uses for the wired connection:
 
 ```bash
-sudo dhclient -v eth0
+nmcli -t -f NAME,DEVICE con show
 ```
 
-**If `dhclient` loops on `DHCPDISCOVER` with no reply** while ICS appears correctly configured, the fix is to uncheck the sharing box in `ncpa.cpl`, apply, then re-check it and apply again. Restarting the `SharedAccess` service does *not* reliably fix this, and doing so requires a genuinely elevated PowerShell prompt anyway.
+This prints `<connection name>:<device>`, e.g. `Wired connection 1:eth0`. The commands below take the connection name (the left part, quoted because of the spaces), not the device — passing `eth0` fails with `unknown connection 'eth0'`.
+
+```bash
+sudo nmcli con mod "Wired connection 1" \
+  ipv4.method manual \
+  ipv4.addresses 192.168.137.50/24 \
+  ipv4.gateway 192.168.137.1 \
+  ipv4.dns "192.168.137.1 8.8.8.8"
+sudo nmcli con up "Wired connection 1"
+```
+
+NetworkManager stores this, so it survives reboots of both machines. `.50` is an arbitrary choice; the Windows side of ICS is always `.1`.
 
 Confirm the board can actually reach the internet, not just the host:
 
@@ -98,15 +113,27 @@ Confirm the board can actually reach the internet, not just the host:
 ping -c 2 archive.ubuntu.com
 ```
 
-Note the assigned address — you will need it for SSH. It comes from DHCP and is not guaranteed to survive a reboot of either machine. If you lose it later, `arp -a` from PowerShell will show what is on the `192.168.137.x` subnet.
+The static address makes SSH independent of ICS's DHCP, but internet access still goes through ICS's NAT. **If the host is reachable but the internet is not**, the fix is to uncheck the sharing box in `ncpa.cpl`, apply, then re-check it and apply again. Restarting the `SharedAccess` service does *not* reliably fix this, and doing so requires a genuinely elevated PowerShell prompt anyway.
+
+### Staying on DHCP
+
+If you skip the static address, check whether one has been assigned with `ip a show eth0` — you are looking for an `inet 192.168.137.x`. If there is none, request one:
+
+```bash
+sudo dhclient -v eth0
+```
+
+If `dhclient` loops on `DHCPDISCOVER` with no reply, apply the same ICS toggle described above. Expect to repeat this whenever the lease is lost; the address is not guaranteed to be the same afterwards, and `arp -a` from PowerShell shows what is on the `192.168.137.x` subnet.
 
 ### Switching to SSH
 
 Once the network is up you can leave the serial console behind for most work:
 
 ```bash
-ssh ubuntu@192.168.137.<n>
+ssh ubuntu@192.168.137.50
 ```
+
+(or whatever address you chose; on DHCP, the one currently assigned).
 
 **Keep the serial console available.** SSH depends on the network and on services that a package operation may restart; if a session dies mid-`dpkg`, the serial console is how you get back in to run `sudo dpkg --configure -a`.
 
