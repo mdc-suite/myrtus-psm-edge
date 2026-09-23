@@ -196,6 +196,28 @@ Expect the first build to take around ten minutes and to pull a couple of GB for
 
 ---
 
+## Checking the power sensor
+
+The energy measurement on ARM reads the SOM's INA260 (LOGBOOK M-A14). Two commands confirm it is exposed on the image you flashed:
+
+```bash
+for h in /sys/class/hwmon/hwmon*; do echo "$h: $(cat $h/name)"; done   # expect ina260_u14
+sudo xmutil xlnx_platformstats -p                                      # "SOM total power"
+```
+
+The subcommand is `xlnx_platformstats`, not `platformstats`; the latter exists in older documentation and is rejected by the version on this image. The `hwmonN` index changes across boots, so the code looks the device up by name and you should too.
+
+The container reads the same sysfs path directly, which works because `compose-server.yml` runs it privileged. Nothing needs to be bind-mounted.
+
+For measurement campaigns the board should be otherwise idle. The timers that wake up on their own are worth stopping first, and re-enabling afterwards:
+
+```bash
+sudo systemctl stop unattended-upgrades.service anacron.timer dpkg-db-backup.timer logrotate.timer \
+                    apt-daily.timer apt-daily-upgrade.timer man-db.timer motd-news.timer
+```
+
+---
+
 ## Troubleshooting
 
 **Nothing appears in PuTTY.** Wrong COM port (use the second one), or flow control left at XON/XOFF. Press Enter a couple of times in case the board has already finished booting.

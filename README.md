@@ -9,7 +9,7 @@ Crypto-agile TLS prototype with eight runtime-selectable AES backends, running o
 **Cross-build host:** Windows + WSL2 (Ubuntu) + Docker Desktop, `linux/arm64` under QEMU
 **On-board host:** Ubuntu 22.04 IoT, Docker Engine, native aarch64 build
 **Base image:** [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu) (arm64/v8)
-**Status:** ✅ **Validated on real silicon.** Builds, registers all 8 implementations, serves over TLS, and round-trips byte-identical (`cmp`) on the Kria KV260. Energy profiling is not yet implemented on ARM
+**Status:** ✅ **Validated on real silicon.** Builds, registers all 8 implementations, serves over TLS, and round-trips byte-identical (`cmp`) on the Kria KV260. Energy is measured on ARM through the on-SOM INA260, so backend selection runs on real measurements.
 
 > Derived from [spdocker](https://github.com/subhadeep-banik/spdocker) by Subhadeep Banik. The complete record of every modification made to port the project from x86-64 to aarch64 is in [`LOGBOOK.md`](LOGBOOK.md).
 
@@ -195,9 +195,11 @@ No output means the files are identical. This is the only trustworthy check — 
 
 ## Known limitations
 
-**Energy profiling is disabled on ARM.** The upstream design selects a backend by measuring its energy cost, using likwid's `ENERGY` performance group. That group reads Intel/AMD RAPL model-specific registers, and the Cortex-A53 has no equivalent — so it cannot work on this platform, emulated or not. The profiling call is skipped on aarch64 rather than left to fail. Implementing power measurement on ARM, most likely through the on-SOM INA260 monitor, is the main piece of open work.
+**Energy on ARM is a board-level figure, not core energy.** likwid's `ENERGY` group reads Intel/AMD RAPL registers, which the Cortex-A53 does not have, so on aarch64 the energy comes from the SOM's INA260 power monitor instead: an idle baseline before and after, a three-second run of the backend, and the difference integrated over the run. The sensor sees the whole module — PS, PL and DDR — so what is measured is the *extra* power a backend draws, about 0.14 W on top of ~3.05 W at rest. It is the right quantity for comparing backends on this board and it is **not** comparable to the x86 RAPL figures, which are CPU-package energy. `LOGBOOK.md` M-A14 has the protocol and the measured characterisation.
 
-**Backend selection is therefore pinned.** With no measurements to compute from, the mode byte stays at its default of 98 and the server always uses `enc_s02_n02` (backend f5). The `dlopen`/`dlsym` machinery itself is fully functional; only the policy input that would drive it is missing.
+**Energy differences below ~1% are not resolved.** A single measurement carries 1.3–3.4 mW of noise on that 0.14 W signal, roughly 1–3% on energy. Backends further apart than that rank consistently; `enc_s02_n01` and `enc_s02_n02`, which sit 0.1% apart, alternate between runs, and that is the honest result rather than a defect.
+
+**Measurement wants a quiet board.** Anything else running on the module shows up in the reading. The code defends itself — power levels are taken as the median of 250 ms block means, and a quality gate repeats a measurement when the two baselines or the two halves of the run disagree by more than 15 mW — but for reference-grade numbers it is worth stopping the periodic system timers (`unattended-upgrades`, `anacron`, `dpkg-db-backup`, `logrotate`) for the duration. Each registration appends the full per-window statistics to `power.csv` next to `db.yaml`, so a suspicious figure can always be traced back.
 
 **Two cosmetic reporting bugs**, both inherited from upstream and present on x86 too: the server's received-byte counter tallies whole 1024-byte chunks and drops the remainder, and the transfer rate divides by an elapsed time that rounds to zero. Neither affects the data — `cmp` is the check that matters.
 
@@ -209,7 +211,7 @@ No output means the files are identical. This is the only trustworthy check — 
 
 The container builds on [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu), a snapshot of a Kria board's own root filesystem published to Docker Hub (`linux/arm64/v8`, ~2 GB compressed).
 
-Stock `ubuntu:22.04` is the same distribution but not the same userspace: AMD's Kria image carries board-specific tooling — `xmutil` and the platform-statistics utilities — that the planned power-measurement work needs. Building on a frozen snapshot also means the toolchain does not depend on what happens to be installed on the board at build time.
+Stock `ubuntu:22.04` is the same distribution but not the same userspace: AMD's Kria image carries board-specific tooling — `xmutil` and the platform-statistics utilities — that the power-measurement work uses. Building on a frozen snapshot also means the toolchain does not depend on what happens to be installed on the board at build time.
 
 Nothing about the application is baked into that snapshot. Every build step lives in the tracked `Dockerfile` on top of it. The procedure for regenerating and republishing the image, including the exclusion mistakes that are easy to make, is documented in [`LOGBOOK.md`](LOGBOOK.md) §11.
 

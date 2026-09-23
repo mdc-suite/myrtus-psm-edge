@@ -9,7 +9,7 @@ This document records **every** modification required to take the project from t
 **Cross-build host:** Windows + WSL2 (Ubuntu) + Docker Desktop, `linux/arm64` under QEMU
 **On-board host:** Ubuntu 22.04 IoT, Docker Engine, native aarch64 build
 **Base image:** [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu) (arm64/v8) — see §11
-**Status:** ✅ **Validated on real silicon.** Builds, registers all 8 implementations, serves over TLS, and round-trips byte-identical (`cmp`) on the Kria KV260. ⚠️ Energy profiling disabled — see §9.
+**Status:** ✅ **Validated on real silicon.** Builds, registers all 8 implementations, serves over TLS, and round-trips byte-identical (`cmp`) on the Kria KV260. Energy is measured on ARM through the on-SOM INA260 — see M-A14.
 
 > Derived from [spdocker](https://github.com/subhadeep-banik/spdocker) by Subhadeep Banik. Changes needed to build on x86 are marked **[baseline]**; ARM-specific changes **[arm]**; changes that emerged only on real hardware **[hw]**.
 > Board bring-up (flashing, networking, Docker install) is documented separately in [`KRIA_KV260_DEPLOYMENT.md`](KRIA_KV260_DEPLOYMENT.md).
@@ -145,8 +145,10 @@ Delete the six-line x86 `rdtscp` definition from each file and add `#include "cy
 
 ```bash
 grep -rn '__asm__ volatile("rdtscp"' --include=*.c .   # must print nothing
-grep -n  "cycles.h" server_f.c profile.c profile01.c internalprofile.c  # 4 lines
+grep -ln "cycles.h" *.c                                 # the files that include it
 ```
+
+> **Where the include stands today.** M-A14 measures its windows with `clock_gettime(CLOCK_MONOTONIC)`, because the sampler and the measured process are two processes and need a shared, absolute timebase, which a per-core cycle counter is not. `profile01.c` and `internalprofile.c` therefore no longer include `cycles.h`, and the dead code that referenced it is gone from both. The header stays in the repo: `profile.c` (upstream's older profiler, which nothing builds) still calls `rdtscp`, `server_f.c` keeps the include over upstream's commented-out calls, and — the real reason — `cycles.h` is where the `cntvct_el0` unit caveat and `cycle_freq()` live, which §9 item 2 will need.
 
 > **M-A6 (folded in).** Commit `587d1e8` fixes a typo introduced by this change: the four `#include "cycles.h"` lines were annotated with a shell-style `# al3monni mod` comment instead of C-style `// al3monni mod`, which the preprocessor rejects. It is recorded here rather than as a separate modification because it is a correction to M-A4, not an independent change — hence the gap between M-A5 and M-A7.
 
@@ -163,25 +165,27 @@ CFLAGS = -w -Wno-incompatible-pointer-types -lcrypto -lssl -ldl -rdynamic
 
 The symbols were never referenced at link time (everything goes through `dlsym`), so this produces a byte-identical binary on x86 while fixing the aarch64 link. `start.sh` regenerates `lib_enc.so` at runtime regardless.
 
-### M-A7 — skip likwid profiling on aarch64 [arm] · `gen.c`
+### M-A7 — protect the manifest from a failed profiler run [arm] · `gen.c`
 **Symptom (cross-build):** on aarch64 the profiler prints `Unsupported ARMv8 Processor` / `Cannot read performance group ENERGY` and, under QEMU, the `./profile` execution **hangs** inside likwid's `popen`. Worse: in `gen.c` the `header.h` manifest update (counter bump + new prototype) sits inside `if(!rt)`, while `rm header.h; mv header1.h header.h` runs **unconditionally** — so a failed or interrupted profiler run wipes the manifest and destroys the registration state.
 
-**Fix:** on aarch64, skip the profiler run and force success so the manifest update still executes:
+**First fix (historical).** The profiler call was skipped on aarch64 and `rt` forced to 0, so that the manifest update still ran. That kept registration working while there was no way to measure energy on ARM at all.
+
+**Current fix.** With M-A14 the profiler *does* run on aarch64, measuring through the INA260, so the skip is gone and `rt = system(com1)` is restored for both architectures. What remains — and what was the real defect — is the manifest hazard, now closed:
 
 ```c
-   sprintf(com1, "./profile %d %d %d", slevel, h, cpu);
-#if defined(__aarch64__)
-   rt = 0;   // skip likwid profiling on aarch64: hangs under QEMU, and the
-             // ENERGY group is unavailable on ARM regardless (see §9).
-             // Force success so header.h still updates.
-#else
-   rt = system(com1);
-#endif
+   if (!rt) {
+       ...                                  // bump the counter, add the prototype
+       system("rm header.h");                // only when profiling succeeded
+       system("mv header1.h header.h");
+   } else {                                  // failed profile: nothing is registered
+       fprintf(stderr, "profile failed (rt=%d): %s not registered, header.h unchanged\n", rt, app);
+       remove("header1.h");
+       sprintf(com1, "rm -f %s/%s.o", libf, app);
+       system(com1);
+   }
 ```
 
-The profiler binaries are still *built* (harmless); only their *execution* is skipped.
-
-**Why the guard stays on real hardware.** The QEMU hang was the symptom that forced this change, but it was not the whole cause, and the fix is not an emulation workaround that the board makes obsolete. likwid's `ENERGY` performance group is built on Intel/AMD RAPL MSRs; the Cortex-A53 has no equivalent register interface, so the group cannot be read on any ARM part, emulated or not. Removing the guard on the board would therefore not restore profiling — it would only reintroduce a failing subprocess in the middle of the registration walk, with the manifest-corruption hazard above still armed. The guard is the correct permanent behaviour for this architecture, and the energy measurement it stands in for is addressed by an entirely different mechanism in §9.
+A failed measurement now leaves no trace: the manifest is untouched, the half-registered object is removed from `LIB/`, and the backend is simply not registered. This matches upstream's intent — the counter bump was always inside `if(!rt)` — and only the unconditional `rm`/`mv` was wrong. Verified by running a walk twice with a stub `profile` returning 1 and 0: on failure `header.h` keeps its counters and `LIB/` stays empty; on success the counter goes to `///1-01` and the object appears.
 
 ### M-A8 — port f7 (AES-128) to ARMv8 Crypto Extensions [arm] · `f7/aes128.c`, `f7/Makefile`
 **Symptom:** `gcc: error: unrecognized command-line option '-maes' / '-msse4.1'`, and the source uses `<wmmintrin.h>` AES-NI intrinsics (`_mm_aesenc_si128`, `_mm_aeskeygenassist_si128`, …).
@@ -234,6 +238,63 @@ After this the compose banner reads `platform: debian-arm64`.
 
 ### M-A13 — align the base image with the board's Ubuntu release [hw] · `Dockerfile` · `aaf1af7`
 Moved the base to Ubuntu 22.04, matching the release running on the Kria board (Ubuntu 22.04 IoT). Aligning the container's userspace with the host's avoids glibc and toolchain version skew between what the code is compiled against and what the board actually runs. Superseded by §11, which replaces the stock image with a snapshot of the board itself.
+
+### M-A14 — energy measurement through the on-SOM INA260 [hw] · new `ina260.h`, `profile01.c`, `internalprofile.c`, `gen.c`
+**Problem.** The component selects a backend from measured time *and* energy. On x86 the energy comes from `likwid-perfctr -g ENERGY`, i.e. from RAPL, which does not exist on the Cortex-A53 (M-A7). Without an energy figure the selection is pinned and the whole crypto-agility mechanism is inert.
+
+**Source of truth on this board.** The K26 SOM carries an INA260 power monitor, exposed by hwmon as `ina260_u14`:
+
+```
+/sys/class/hwmon/hwmon2/name          -> ina260_u14
+/sys/class/hwmon/hwmon2/power1_input  -> microwatts   (10 mW per step)
+/sys/class/hwmon/hwmon2/curr1_input   -> milliamps
+/sys/class/hwmon/hwmon2/in1_input     -> millivolts
+```
+
+The `hwmonN` index is not stable across boots, so the code finds the device **by name**. The same figure is what `xmutil xlnx_platformstats -p` prints as *SOM total power* (note the subcommand: `xlnx_platformstats`, not `platformstats`). Measured update interval is ~2.2 ms — the INA260 default of 1.1 ms conversion for current plus 1.1 ms for voltage — confirmed on the board by watching how often the value changes.
+
+**What the sensor can and cannot do.** It reports the whole SOM: PS, PL and DDR. At rest the board draws ~3.05 W; one A53 core at full load adds ~0.14 W. The quantity of interest is therefore ~5% of the reading, which dictates the entire protocol below: a single AES block is far below the sensor's resolution, so nothing can be measured per operation, and an idle baseline must be subtracted.
+
+**Protocol, per backend.** `profile01.c` (aarch64 branch only; the x86 branch is the untouched likwid path):
+
+1. start the sampler thread — one `power1_input` read every 2 ms, pinned to cpu1;
+2. 2 s of **idle baseline**;
+3. run `./internalprofile s n 3`, which loops the backend for 3 s on cpu3 and prints its own `CLOCK_MONOTONIC` window and iteration count, so the parent integrates over exactly the loop and not over `fork`/`exec`;
+4. 2 s of **idle baseline again**;
+5. net power = run level − mean of the two baselines; energy and time are scaled to 50 000 iterations, which is upstream's `ITER`, so `db.yaml` keeps the x86 format and magnitudes and `synthesize` is untouched.
+
+The workload runs for a fixed *time* rather than a fixed iteration count because the backends span three orders of magnitude (0.57 s to 145 s per 50 000 iterations): any fixed count is either too short to measure or absurdly long.
+
+**Estimator.** Every window's power level is the **median of its 250 ms block means**, not the plain mean. A foreign process burning power for part of a window shifts the mean by tens of mW; it spoils two or three blocks and leaves their median where it was. A plain median of the samples would be robust too, but it is quantised to the sensor's 10 mW step, which is most of the gap between two backends. Averaging ~125 samples per block brings the resolution well below a milliwatt. `ina260_stats()` computes mean, median, robust value, sd, min and max for any window; all three estimators are logged so they can be compared after the fact.
+
+**Quality gate.** An attempt is accepted only if the two baselines agree within 15 mW, the two halves of the run agree within 15 mW, and the net power is positive. Otherwise the measurement is repeated, up to three attempts, keeping the cleanest one and warning if none passes. On a quiet board the gate fires on ~2% of measurements.
+
+**Logging.** Every attempt appends a line to `power.csv` next to `db.yaml`: sample counts, mean/median/robust/sd/min/max for each window, the deviation the gate computed, and the net power under all three estimators. `db.yaml` keeps only the robust figure, in the upstream format.
+
+**Characterisation** (8 h unattended run, 283 measurements per backend, plus targeted tests; board otherwise idle, governor `performance`). The campaign predates the robust estimator and was taken with the mean-based one; the two agree within a few mW, which the later walks confirm backend by backend (+3.8, +2.8, +3.2, −0.1, +3.8, +1.6, +1.7, −5.7 mW), so the figures below stand as the reference for this board:
+
+| backend | time per 50 000 it [s] | net power [mW] | energy per 50 000 it [J] |
+|---|---|---|---|
+| `enc_s01_n01` | 1.4917 | 131.1 | 0.198 |
+| `enc_s01_n02` | 1.3867 | 145.5 | 0.205 |
+| `enc_s01_n03` | 110.27 | 139.0 | 15.6 |
+| `enc_s01_n04` | 0.5736 | 145.7 | 0.085 |
+| `enc_s02_n01` | 2.0313 | 130.5 | 0.267 |
+| `enc_s02_n02` | 1.8161 | 144.6 | 0.267 |
+| `enc_s02_n03` | 145.14 | 139.7 | 20.5 |
+| `enc_s02_n04` | 0.7318 | 142.5 | 0.105 |
+
+- **Repeatability.** A single measurement has a standard deviation of 1.3–3.4 mW on net power, i.e. 1–3% on energy. Times reproduce to four digits.
+- **Backends really differ.** The 14 mW gap between `n01` and `n02` is ~60 standard errors over 283 measurements: it is an effect of the backend, not noise. Backends closer than ~1% in energy (`s02_n01` vs `s02_n02`, 0.1% apart) are not ranked reliably, and should not be.
+- **Not thermal.** Correlation between net power and the FPD temperature sensor is between −0.47 and +0.70 over short runs and |r| ≤ 0.1 over 8 h across 30.1–34.5 °C, with the fan at constant pwm. Temperature is not driving the scatter.
+- **Idle stability.** 3.05–3.07 W with a run-to-run spread of 3–11 mW; per-sample noise is ~30 mW.
+- **Walk vs isolated measurement.** Energies produced during a full registration walk agree with isolated measurements within 2.3%.
+
+**Pitfall worth recording: the gate filters disturbances asymmetrically.** A harness that polled the container with `docker exec` every 5 s while a walk was running biased *every* walk low by ~45 mW (−31% on energy). The mechanism is not the disturbance itself but its interaction with the gate: a burst landing inside the run window makes the two halves disagree and the attempt is retried, while a burst landing in both baselines is symmetric, passes the gate, and inflates the subtracted baseline. Accepted attempts are therefore biased towards the ones that *underestimate*. The harness now waits by following the container log, which costs nothing inside the container; the robust estimator makes the measurement itself resistant to the same class of disturbance. Reproduced and fixed under controlled conditions: with polling active, the old code gave 96 mW against a true 140 mW, the new code gives 140 mW.
+
+**Requirements.** The container must see `/sys/class/hwmon`, which it does because `compose-server.yml` runs it privileged. For reference-grade numbers the board should be otherwise idle: `unattended-upgrades`, `anacron`, `dpkg-db-backup` and `logrotate` timers wake up on their own and are worth stopping for the duration of a measurement campaign.
+
+**Tools.** `ina260_test.c` is a standalone check of the sampler: it prints sampling statistics, idle power and the delta of one busy core. `bench_ina260.sh` runs unattended campaigns (round-robin measurements, idle tracking, a spin-loop reference and periodic full walks) and writes a csv plus a rolling summary.
 
 ---
 
@@ -400,7 +461,7 @@ One byte encodes the choice (`encrypt02.c`):
 //             op = (function) dlsym(cx->handle, buf);
 ```
 
-Default `mode = 98 = 0x62 = 0110 0010` → `sbits=2, ibits=2` → **`enc_s02_n02`** (= f5). Because profiling is disabled (M-A7, §9), `synthesize` never moves `mode` off 98 and the server always reports `Starting with enc_s02_n02`. This is not a bug — it is the honest consequence of having no energy measurements to select on. The `dlopen`/`dlsym` machinery is fully functional; only the *policy input* that would drive it is missing.
+Default `mode = 98 = 0x62 = 0110 0010` → `sbits=2, ibits=2` → **`enc_s02_n02`** (= f5). With M-A14 the registration walk fills `db.yaml` with real measurements on aarch64 too, so `synthesize` moves `mode` off 98: across the nine policy combinations of each security level all four backends are selected, `n04` at `-t 0 -e 0` and `n03` at `-t 2 -e 2`. Off-diagonal policies ("fast but expensive") are physically contradictory on this board, since energy is time times a nearly constant power, and `synthesize` returns the nearest point in the normalised plane, which is `n01` or `n02` — the two that sit within ~5% of each other.
 
 ### Implementation map — the contract (post-port)
 
@@ -431,23 +492,27 @@ On the Kria, f7 and f8 are the two backends that exercise the A53's crypto exten
 
 | # | Symptom | Cause | Impact |
 |---|---|---|---|
-| 1 | `Cannot read performance group ENERGY` | likwid's energy path is built on x86 RAPL MSRs; the Cortex-A53 exposes no equivalent | **Energy profiling unavailable.** Registration still succeeds — `cp → LIB/` happens *before* profiling, and M-A7 skips the call entirely |
-| 2 | `mode` stuck at `98` → always `enc_s02_n02` | consequence of #1: with no measurements, `synthesize` has nothing to compute a mode from | selection is pinned; does not affect correctness testing |
+| 1 | likwid's `ENERGY` group cannot be read | it is built on x86 RAPL MSRs; the Cortex-A53 exposes no equivalent | **Resolved by M-A14**: on aarch64 the energy comes from the INA260 instead, and likwid is no longer on the energy path |
+| 2 | `mode` stuck at `98` → always `enc_s02_n02` | was a consequence of #1 | **Resolved by M-A14**: `db.yaml` now carries measurements and `synthesize` selects on them (§8) |
 | 3 | `Recieved 9216 bytes` for a 10000 B file | the counter tallies 9×1024 chunks and drops the 784 B remainder | cosmetic — `cmp` proves the data is intact |
 | 4 | `rate inf bps` | elapsed time rounds to 0 → division by zero | cosmetic |
 
-Issues 1 and 2 are architectural, not defects introduced by the port; 3 and 4 are upstream reporting bugs present on x86 as well.
+Issues 1 and 2 were architectural, not defects introduced by the port, and are now closed; 3 and 4 are upstream reporting bugs present on x86 as well.
 
 ### Resolved by this port
 
 - Upstream `check*.c` omission (M-B1/M-B2) — `LIB/` now populates on any architecture.
 - `register` silently omitting slots on symbol clash — surfaced and fixed for f7/f8 (M-A10). Always run `./reset` before a fresh walk and count the objects in `LIB/` rather than trusting the exit status.
-- likwid profiler hang and manifest corruption (M-A7).
+- likwid profiler hang and manifest corruption (M-A7): the profiler no longer runs through likwid on ARM, and a failed measurement can no longer wipe the manifest.
+- Energy measurement on aarch64 (M-A14): measured through the INA260, characterised over 8 h, and driving backend selection again.
 - Full aarch64 validation on real silicon, not only under emulation (§7).
 
 ### Remaining work
 
-**1. Power measurement on ARM — the main open item.** The selection logic this component is built around needs an energy figure per backend, and the mechanism that supplied it on x86 does not exist here. What is needed is a change to the measurement code so that a power figure can be obtained on aarch64 at all; the likely route is the board's on-SOM INA260 power monitor, but the approach is not settled and the alternatives have not been ruled out. Whatever mechanism is chosen has to deal with the fact that a single AES operation completes far below the resolution of any board-level power sensor, so the measurement will have to be taken over sustained runs and attributed back to individual backends rather than sampled per operation. Until this lands, issue #2 stands and backend selection remains pinned.
+**1. Residual limits of the INA260 measurement (M-A14).** Three things are known and unresolved, none of them blocking:
+- *Resolution floor.* A single measurement carries 1.3–3.4 mW of noise on a ~140 mW signal, so backends whose energies differ by less than ~1% are not ranked reliably. `s02_n01` and `s02_n02` are 0.1% apart and do alternate between walks; that is the honest answer, not a defect.
+- *Gate tolerance.* The 15 mW threshold accepts a slow baseline drift across a measurement: one walk showed a 11 mW difference between the two baselines, biasing that backend ~7% low. Tightening to 8–10 mW would catch it at the cost of more repeated measurements.
+- *Board-level scope.* The figure includes PS, PL and DDR, so it is a delta against idle, not core energy. It is valid for comparing backends on this board and is **not** comparable to the x86 RAPL numbers, which are CPU-package energy. Any cross-platform statement has to say so.
 
 **2. Cycle-unit reconciliation.** `cntvct_el0` counts generic-timer ticks at a fixed frequency, not CPU cycles (M-A3). Any timing figure derived from it is in the wrong units for comparison against x86 results; `cycle_freq()` provides the conversion factor and must be applied when real measurements are wired up.
 
@@ -481,6 +546,7 @@ Oldest first. `git log --oneline --graph al3monni-test-arm` is the authoritative
 | `dc78a00` | `LIB/`: untrack stale x86-64 build artefacts, regenerated by `start.sh` at container start | — |
 | `bb4ce8c` | add `.gitignore`; untrack generated `test1.c`/`test2.c` | — |
 | `66baa82` | Dockerfile: base image to `al3monni/kria-ubuntu:22.04.5` — snapshot rebuilt from a freshly flashed, fully upgraded board after the first one was found to be missing `/tmp` and `/run` | §11 |
+| _(this change)_ | INA260 energy measurement on aarch64: `ina260.h`, time-based workload, robust estimator, quality gate, `power.csv`; manifest hazard closed in `gen.c` | M-A14, M-A7 |
 
 The ARM work falls into four phases: **make it build** (`9207e41` … `c992b51`), **make it register and run correctly** (`af69ca9` … `9a902ab`), **move it onto the board's own userspace** (`e5edc89` … `ad1385f`), and **clean up and correct the base** (`dc78a00` … `66baa82`).
 
