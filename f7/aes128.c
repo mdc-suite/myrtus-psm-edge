@@ -1,6 +1,84 @@
-#include <stdio.h>
-#include <arm_neon.h>   // ARMv8 NEON + Crypto Extensions intrinsics
+/* f7/aes128.c -- AES-128, single block, using the AES instructions of the host.
+ *
+ *   x86-64  : AES-NI (upstream implementation, unchanged)
+ *   aarch64 : ARMv8 Crypto Extensions (LOGBOOK M-A8)
+ *
+ * al3monni mod: the ARM implementation, and the split below. The port used to
+ * replace the AES-NI path, which cost the x86-64 build these two backends: a
+ * walk there registered six of eight. Both paths now live side by side and the
+ * preprocessor picks one, so every architecture registers all eight.
+ *
+ * Both produce identical ciphertext: the ARM side expands the key in scalar C
+ * to the same schedule AES-NI's keygenassist produces.
+ */
 #include <stdint.h>
+
+#if defined(__x86_64__) || defined(__i386__)
+
+#include <wmmintrin.h>   /* AES-NI intrinsics */
+#include <smmintrin.h>   /* SSE4.1 */
+#include <wmmintrin.h> // Header for AES-NI intrinsics
+#include <smmintrin.h> // Header for SSE4.1 (used for printing/manipulation)
+
+// Helper function to expand the 128-bit round key
+static inline __m128i aes_128_key_expand(__m128i key, __m128i keygened) {
+    keygened = _mm_shuffle_epi32(keygened, _MM_SHUFFLE(3, 3, 3, 3));
+    key = _mm_xor_si128(key, _mm_slli_si128(key, 4));
+    key = _mm_xor_si128(key, _mm_slli_si128(key, 4));
+    key = _mm_xor_si128(key, _mm_slli_si128(key, 4));
+    return _mm_xor_si128(key, keygened);
+}
+
+// Generates the 11 round keys required for AES-128
+static void aes128_load_keys(const uint8_t *enc_key, __m128i *round_keys) {
+    round_keys[0] = _mm_loadu_si128((const __m128i*)enc_key);
+    round_keys[1]  = aes_128_key_expand(round_keys[0],  _mm_aeskeygenassist_si128(round_keys[0],  0x01));
+    round_keys[2]  = aes_128_key_expand(round_keys[1],  _mm_aeskeygenassist_si128(round_keys[1],  0x02));
+    round_keys[3]  = aes_128_key_expand(round_keys[2],  _mm_aeskeygenassist_si128(round_keys[2],  0x04));
+    round_keys[4]  = aes_128_key_expand(round_keys[3],  _mm_aeskeygenassist_si128(round_keys[3],  0x08));
+    round_keys[5]  = aes_128_key_expand(round_keys[4],  _mm_aeskeygenassist_si128(round_keys[4],  0x10));
+    round_keys[6]  = aes_128_key_expand(round_keys[5],  _mm_aeskeygenassist_si128(round_keys[5],  0x20));
+    round_keys[7]  = aes_128_key_expand(round_keys[6],  _mm_aeskeygenassist_si128(round_keys[6],  0x40));
+    round_keys[8]  = aes_128_key_expand(round_keys[7],  _mm_aeskeygenassist_si128(round_keys[7],  0x80));
+    round_keys[9]  = aes_128_key_expand(round_keys[8],  _mm_aeskeygenassist_si128(round_keys[8],  0x1B));
+    round_keys[10] = aes_128_key_expand(round_keys[9],  _mm_aeskeygenassist_si128(round_keys[9],  0x36));
+}
+
+// Encrypts a single 16-byte block
+static void aes128_encrypt(const uint8_t *plaintext, const __m128i *round_keys, uint8_t *ciphertext) {
+    // Load plaintext into a 128-bit register
+    __m128i block = _mm_loadu_si128((const __m128i*)plaintext);
+
+    // Initial Round (XOR with the original key)
+    block = _mm_xor_si128(block, round_keys[0]);
+
+    // 9 Standard Rounds
+    block = _mm_aesenc_si128(block, round_keys[1]);
+    block = _mm_aesenc_si128(block, round_keys[2]);
+    block = _mm_aesenc_si128(block, round_keys[3]);
+    block = _mm_aesenc_si128(block, round_keys[4]);
+    block = _mm_aesenc_si128(block, round_keys[5]);
+    block = _mm_aesenc_si128(block, round_keys[6]);
+    block = _mm_aesenc_si128(block, round_keys[7]);
+    block = _mm_aesenc_si128(block, round_keys[8]);
+    block = _mm_aesenc_si128(block, round_keys[9]);
+
+    // 1 Final Round (Omits the MixColumns step automatically)
+    block = _mm_aesenclast_si128(block, round_keys[10]);
+
+    // Store the encrypted result
+    _mm_storeu_si128((__m128i*)ciphertext, block);
+}
+void aes128(uint8_t * plaintext , uint8_t * key,uint8_t * ciphertext)
+{    __m128i round_keys[11];
+    aes128_load_keys(key, round_keys);    
+    aes128_encrypt(plaintext, round_keys, ciphertext);
+}
+
+#elif defined(__aarch64__)
+
+#include <arm_neon.h>    /* NEON + Crypto Extensions intrinsics */
+#include <arm_neon.h>   // ARMv8 NEON + Crypto Extensions intrinsics
 
 // ---- AES-128 key expansion (portable C, matches x86 round_keys[0..10]) ----
 // The x86 version used _mm_aeskeygenassist + shuffles. On ARM there is no
@@ -75,3 +153,7 @@ void aes128(uint8_t *plaintext, uint8_t *key, uint8_t *ciphertext) {
 
     vst1q_u8(ciphertext, block);
 }
+
+#else
+#error "f7/aes128.c: this backend needs AES instructions (x86-64 AES-NI or ARMv8 Crypto Extensions)"
+#endif
