@@ -77,6 +77,14 @@ This does not survive `wsl --shutdown` — re-run it if you get `exec format err
 
 The cross-build is useful for catching compile errors without occupying the board, but everything runs emulated and a clean build is slower than on the board itself.
 
+To build for x86-64 *natively* instead, override the base image — the Kria one is arm64-only, and on x86-64 every `RUN` would fail with `exec format error`:
+
+```bash
+docker compose -f compose-server.yml build --build-arg BASE=ubuntu:22.04
+```
+
+All eight backends build there too: `f7` and `f8` carry both AES implementations and pick one at compile time, AES-NI on x86-64 and the ARMv8 Crypto Extensions on the Kria. Energy, however, is not measurable under WSL2 or Docker Desktop — likwid needs RAPL registers that a virtualised kernel does not expose.
+
 ---
 
 ## Build and run
@@ -203,7 +211,7 @@ No output means the files are identical. This is the only trustworthy check — 
 
 **Two cosmetic reporting bugs**, both inherited from upstream and present on x86 too: the server's received-byte counter tallies whole 1024-byte chunks and drops the remainder, and the transfer rate divides by an elapsed time that rounds to zero. Neither affects the data — `cmp` is the check that matters.
 
-**The x86-64 baseline has not been re-validated recently.** It last passed at commit `ddb5f5f`; the ARM branch has diverged considerably since, including a change of base image.
+**The x86-64 baseline is only partly re-validated.** Build and registration pass against the current tree — eight backends, all KATs — but the energy figures do not: likwid needs RAPL registers that WSL2 and Docker Desktop do not expose, so real x86-64 numbers need a bare-metal Linux host. The end-to-end round trip has not been re-run there since `ddb5f5f` either.
 
 ---
 

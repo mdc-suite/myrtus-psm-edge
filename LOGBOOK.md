@@ -42,7 +42,7 @@ Both the x86-64 baseline and the aarch64 port are validated end-to-end by a byte
 
 **(a) Upstream out-of-the-box failure [baseline].** A fresh clone fails on *any* architecture because `check1.c` / `check2.c` (the KAT templates `register.c` reads) are missing from the repo. `register.c` truncates `test%d.c` via `fopen(...,"wb")` *before* checking the template exists, so the test binary ends up empty → `undefined reference to 'main'` → `TEST FAILED` → `LIB/` never populated → `gcc -shared ./LIB/*.o` matches nothing. `start.sh` hides all of it (`> /dev/null 2>&1` per register, unconditional `echo`). Fixed by reconstructing both templates (§3, M-B1/M-B2).
 
-**(b) Architecture faults [arm].** Once it builds on x86, the aarch64 cross-build exposes: likwid compiling its x86 access layer; four copies of x86 `rdtscp` inline asm; a vestigial `-l_enc` link against a committed x86 `.so`; the likwid profiler hanging under QEMU and corrupting the manifest; and f7/f8 using x86 AES-NI intrinsics and flags. All addressed in §4, and subsequently confirmed on native aarch64 hardware — none of the fixes were artefacts of emulation.
+**(b) Architecture faults [arm].** Once it builds on x86, the aarch64 cross-build exposes: likwid compiling its x86 access layer; four copies of x86 `rdtscp` inline asm; a vestigial `-l_enc` link against a committed x86 `.so`; the likwid profiler hanging under QEMU and corrupting the manifest; and f7/f8 using x86 AES-NI intrinsics and flags. All addressed in §4, and subsequently confirmed on native aarch64 hardware — none of the fixes were artefacts of emulation. The f7/f8 fix initially went one step too far and dropped the x86-64 build along the way; M-A15 put it back, with both instruction sets in one source.
 
 A third class — **energy instrumentation** — turned out not to be a port bug at all but an architectural dead end, and is treated separately in §9.
 
@@ -191,14 +191,14 @@ A failed measurement now leaves no trace: the manifest is untouched, the half-re
 **Symptom:** `gcc: error: unrecognized command-line option '-maes' / '-msse4.1'`, and the source uses `<wmmintrin.h>` AES-NI intrinsics (`_mm_aesenc_si128`, `_mm_aeskeygenassist_si128`, …).
 
 **Fix:**
-- Makefile flags: `-maes -msse4.1` → `-march=armv8-a+crypto`.
+- Makefile flags: `-maes -msse4.1` → `-march=armv8-a+crypto`. *(Superseded by M-A15: the flags are now chosen from the build architecture, and the AES-NI implementation is back beside the ARM one rather than replaced by it.)*
 - Rewrote `aes128.c` using NEON crypto intrinsics: 9× `vaesmcq_u8(vaeseq_u8(state, rk_i))`, then a final `vaeseq_u8` + `veorq_u8` with `rk_10`.
 - **Key semantics differ from x86.** `vaeseq_u8` XORs the round key at the *start* of the round (AddRoundKey → SubBytes → ShiftRows) and MixColumns is a separate `vaesmcq_u8`, whereas AES-NI's `_mm_aesenc_si128` XORs the key at the *end*. The round keys are therefore effectively shifted by one position relative to the x86 code — getting this wrong produces plausible-looking output that fails the KAT.
 - Key expansion is done in scalar C (FIPS-197) rather than translating `_mm_aeskeygenassist` — safer, and yields the identical 176-byte schedule.
 - **Validated:** KAT (`test1.c`) passes → output is bit-identical to the AES-NI reference, and re-verified natively on the A53.
 
 ### M-A9 — port f8 (AES-256) to ARMv8 Crypto Extensions [arm] · `f8/aes256.c`, `f8/Makefile`
-Same approach as M-A8, adapted for AES-256: **14 rounds** (13× `vaese` + `vaesmc`, final `vaese` + `veorq` with `rk_14`) and a 240-byte scalar key schedule with the AES-256-specific **extra SubWord** applied on every word where `i % 8 == 4`. Makefile flags changed identically. **Validated:** KAT (`test2.c`) passes bit-identical.
+Same approach as M-A8, adapted for AES-256: **14 rounds** (13× `vaese` + `vaesmc`, final `vaese` + `veorq` with `rk_14`) and a 240-byte scalar key schedule with the AES-256-specific **extra SubWord** applied on every word where `i % 8 == 4`. Makefile flags changed identically, and made conditional in the same way by M-A15. **Validated:** KAT (`test2.c`) passes bit-identical.
 
 ### M-A10 — unique lookup-table names to avoid `collide()` [arm] · `f7/aes128.c`, `f8/aes256.c`
 **Symptom:** f7 and f8 passed their KATs in isolation but produced **no object** in the full f1→f8 walk — `register` reported success (exit 0) yet `LIB/` held 6 objects instead of 8.
@@ -295,6 +295,38 @@ The workload runs for a fixed *time* rather than a fixed iteration count because
 **Requirements.** The container must see `/sys/class/hwmon`, which it does because `compose-server.yml` runs it privileged. For reference-grade numbers the board should be otherwise idle: `unattended-upgrades`, `anacron`, `dpkg-db-backup` and `logrotate` timers wake up on their own and are worth stopping for the duration of a measurement campaign.
 
 **Tools.** `ina260_test.c` is a standalone check of the sampler: it prints sampling statistics, idle power and the delta of one busy core. `bench_ina260.sh` runs unattended campaigns (round-robin measurements, idle tracking, a spin-loop reference and periodic full walks) and writes a csv plus a rolling summary.
+
+### M-A15 — one source per backend, two instruction sets [both] · `f7/aes128.c`, `f8/aes256.c`, `f7/Makefile`, `f8/Makefile` · `13dd6af`
+**Symptom:** M-A8 and M-A9 *replaced* the AES-NI implementations instead of adding to them, so after the port f7 and f8 built only on aarch64. A registration walk on x86-64 registers six backends instead of eight: `gcc` there rejects `-march=armv8-a+crypto` and has no `<arm_neon.h>`. The port had quietly traded one architecture for the other.
+
+**Fix:** each of the two backends now carries both implementations and picks one at compile time.
+
+```c
+#if defined(__x86_64__) || defined(__i386__)
+#include <wmmintrin.h>        /* AES-NI */
+...
+#elif defined(__aarch64__)
+#include <arm_neon.h>         /* ARMv8 Crypto Extensions */
+...
+#else
+#error "f7/aes128.c needs AES instructions (AES-NI or ARMv8 CE)"
+#endif
+```
+
+with the Makefiles taking the flags from the build machine:
+
+```make
+ARCH         := $(shell uname -m)
+ifeq ($(ARCH),aarch64)
+CFLAGS       = -c -fPIC -march=armv8-a+crypto
+else
+CFLAGS       = -c -fPIC -maes -msse4.1
+endif
+```
+
+`uname -m` is the *builder's* architecture, which is the right question to ask here: registration compiles the backend inside the container, on the machine that will then run it. `gen.c`'s `sed` copies the conditional into `Makefile_new` untouched, so no other stage of the pipeline needed to change. The x86-64 helpers were made `static`: with both implementations in one translation unit their names would otherwise reach `lib_enc.so` twice, the same class of clash as M-A10.
+
+**Validated:** both branches produce the FIPS-197 vectors and are byte-identical to each other — `69c4e0d86a7b0430d8cdb78070b4c55a` for AES-128, `8ea2b7ca516745bfeafc49904b496089` for AES-256 — compiled natively on x86-64, and cross-compiled for aarch64 and run under `qemu-aarch64-static`. A full `f1`→`f8` walk on x86-64 registers eight backends. On the Kria, `db.yaml` still holds eight, with `enc_s01_n04` at 0.573 s / 0.0844 J and `enc_s02_n04` at 0.731 s / 0.1062 J — the M-A14 characterisation figures, so merging the two branches left the ARM path where it was.
 
 ---
 
@@ -444,7 +476,13 @@ docker exec Test-server sh -c 'cd /app && cmp rfile Downloads/filename-ekm<N> &&
 
 Everything that passed under emulation also passes on the silicon: no part of the port was an artefact of QEMU.
 
-> **x86-64 baseline status.** The table above covers the aarch64 paths only. The x86-64 baseline was last validated end-to-end at commit `ddb5f5f` (branch `al3monni-test`) and has not been re-run since; the ARM work has diverged considerably from it in the meantime, including the base image change. Re-validating x86-64 against the current tree is open work.
+> **x86-64 baseline status — partially re-validated.** The table above covers the aarch64 paths only. The x86-64 baseline was last validated end-to-end at commit `ddb5f5f` (branch `al3monni-test`); against the current tree, three things are now known.
+>
+> *The image needs a base argument.* `al3monni/kria-ubuntu:22.04.5` is arm64-only, so on x86-64 every `RUN` dies with `exec /bin/sh: exec format error`. The `FROM` is parameterised (§11), and an x86-64 build is `docker compose -f compose-server.yml build --build-arg BASE=ubuntu:22.04`.
+>
+> *Build and registration pass.* A full `f1`→`f8` walk on x86-64 registers eight backends with all KATs passing, `-maes -msse4.1` included, since M-A15.
+>
+> *Energy is not measurable under WSL2 or Docker Desktop.* likwid reports `Cannot get access to MSRs`: both run a virtualised kernel with no RAPL. This is the environment, not the code — the parsing path was exercised with a stub `likwid-perfctr` emitting a canned `ENERGY` table, and `db.yaml` filled correctly from it. Real x86-64 energy numbers need bare metal (a live USB, a lab machine or a dual boot) and remain open, as does the end-to-end round trip on x86-64.
 
 ---
 
@@ -470,11 +508,11 @@ Default `mode = 98 = 0x62 = 0110 0010` → `sbits=2, ibits=2` → **`enc_s02_n02
 | f1 | `aes128` | plain C | `enc_s01_n01` | reference AES-128 |
 | f2 | `AES_enc` | plain C | `enc_s01_n02` | `.s` file present but **unused** by Makefile |
 | f3 | `aes_ecb_encrypt` | `-DUNROLL_TRANSPOSE` (bitsliced) | `enc_s01_n03` | pure C, ports free |
-| f7 | `aes128` | **`-march=armv8-a+crypto`** | `enc_s01_n04` | **M-A8/M-A10** — ported from AES-NI |
+| f7 | `aes128` | **`-march=armv8-a+crypto`** (x86-64: `-maes -msse4.1`) | `enc_s01_n04` | **M-A8/M-A10/M-A15** — AES-NI and ARMv8 CE in one source, chosen by `uname -m` |
 | f4 | `aes256` | plain C | `enc_s02_n01` | reference AES-256 |
 | f5 | `AES256_enc` | plain C | `enc_s02_n02` | **default target**; `.s` present but unused |
 | f6 | `aes256_ecb_encrypt` | bitsliced | `enc_s02_n03` | pure C, ports free |
-| f8 | `aes256` | **`-march=armv8-a+crypto`** | `enc_s02_n04` | **M-A9/M-A10** — ported from AES-NI |
+| f8 | `aes256` | **`-march=armv8-a+crypto`** (x86-64: `-maes -msse4.1`) | `enc_s02_n04` | **M-A9/M-A10/M-A15** — AES-NI and ARMv8 CE in one source, chosen by `uname -m` |
 
 Registration order **is** the numbering — the table above is a contract, not a description. Reordering the `register` calls in `start.sh` renumbers the symbols and silently breaks agreement with any client built against the old order.
 
@@ -516,7 +554,7 @@ Issues 1 and 2 were architectural, not defects introduced by the port, and are n
 
 **2. Cycle-unit reconciliation.** `cntvct_el0` counts generic-timer ticks at a fixed frequency, not CPU cycles (M-A3). Any timing figure derived from it is in the wrong units for comparison against x86 results; `cycle_freq()` provides the conversion factor and must be applied when real measurements are wired up.
 
-**3. x86-64 re-validation.** The baseline has not been re-run since `ddb5f5f` and the tree has moved considerably, including the base image change. See the note at the end of §7.
+**3. x86-64 energy on bare metal.** The x86-64 build and registration paths are re-validated against the current tree and f7/f8 build there again (M-A15), but the energy figures are not: likwid needs RAPL MSRs, which WSL2 and Docker Desktop do not expose. Only the parsing was checked, with a stub `likwid-perfctr`. Producing real x86-64 numbers — and with them any cross-platform comparison, bearing in mind that RAPL is package energy while the INA260 is board-level — needs a bare-metal x86-64 Linux host. The end-to-end round trip has not been re-run there either. See the note at the end of §7.
 
 **4. Optional upstream fixes.** Initialise `bool rval = 0;` in `register.c`; return non-zero from `register` when `collide()` refuses, so a skipped implementation is not reported as success; check that the `check%d.c` template exists *before* opening `test%d.c` for writing.
 
@@ -547,6 +585,9 @@ Oldest first. `git log --oneline --graph al3monni-test-arm` is the authoritative
 | `bb4ce8c` | add `.gitignore`; untrack generated `test1.c`/`test2.c` | — |
 | `66baa82` | Dockerfile: base image to `al3monni/kria-ubuntu:22.04.5` — snapshot rebuilt from a freshly flashed, fully upgraded board after the first one was found to be missing `/tmp` and `/run` | §11 |
 | `7debc15` | INA260 energy measurement on aarch64: `ina260.h`, time-based workload, robust estimator, quality gate, `power.csv`; manifest hazard closed in `gen.c` | M-A14, M-A7 |
+| `fec03c9` | untrack the files registration regenerates (`wrapper.c`, `source.c`, `test.c`, `db.yaml`) and the leftovers that were never part of the project; drop the dead `profile.c` | — |
+| `baf99d5` | untrack `f*/Makefile_new`, which `gen.c` rewrites from `f*/Makefile` at every registration | — |
+| `13dd6af` | f7/f8 build on both architectures again; `ARG BASE` so the image also builds on x86-64 | M-A15 |
 
 The ARM work falls into four phases: **make it build** (`9207e41` … `c992b51`), **make it register and run correctly** (`af69ca9` … `9a902ab`), **move it onto the board's own userspace** (`e5edc89` … `ad1385f`), and **clean up and correct the base** (`dc78a00` … `66baa82`).
 
@@ -557,7 +598,14 @@ The ARM work falls into four phases: **make it build** (`9207e41` … `c992b51`)
 The container is layered on **[`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu)** — a snapshot of the board's own root filesystem, published to Docker Hub. `linux/arm64/v8`, ~2 GB compressed.
 
 ```dockerfile
-FROM al3monni/kria-ubuntu:22.04.5
+ARG BASE=al3monni/kria-ubuntu:22.04.5
+FROM ${BASE} AS build-env
+```
+
+The image is arm64-only, so on an x86-64 host every `RUN` fails with `exec /bin/sh: exec format error` before it runs anything. The base is therefore a build argument: the default is the board image, and an x86-64 build overrides it.
+
+```bash
+docker compose -f compose-server.yml build --build-arg BASE=ubuntu:22.04
 ```
 
 ### Why not stock `ubuntu:22.04`
