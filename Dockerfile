@@ -1,7 +1,11 @@
-# al3monni/kria-ubuntu:22.04.5 is a custom docker image
-# based on ubuntu 22.04.5 IotT with kria tools and libraries pre-installed
-ARG BASE=al3monni/kria-ubuntu:22.04.5
-FROM ${BASE} AS build-env
+# Base image, chosen from the target architecture (TARGETARCH is set by BuildKit):
+#   arm64 -> al3monni/kria-ubuntu:22.04.5, a snapshot of the Kria KV260 rootfs
+#            (Ubuntu 22.04.5 IoT with the Kria tools and libraries pre-installed)
+#   amd64 -> ubuntu:22.04, the same distribution without the board tooling
+ARG TARGETARCH
+FROM al3monni/kria-ubuntu:22.04.5 AS base-arm64
+FROM ubuntu:22.04 AS base-amd64
+FROM base-${TARGETARCH} AS build-env
 
 # install build-essential, openssl, libssl-dev, lsof, iputils-ping, wget, perl
 # buld-essential meta package includes gcc, g++, make, libc-dev, etc.
