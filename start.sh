@@ -23,4 +23,5 @@ echo Creating Shared Library lib_enc.so
 gcc -shared ./LIB/*.o -o ./LIB/lib_enc.so
 echo Updating Paths
 export LD_LIBRARY_PATH=:$PWD/LIB
+mkdir -p Downloads   # the server saves received files here and does not create it
 ./server
