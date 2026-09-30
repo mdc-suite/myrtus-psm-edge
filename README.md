@@ -4,7 +4,7 @@ Crypto-agile TLS prototype with eight runtime-selectable AES backends, running o
 
 **Repo:** https://github.com/mdc-suite/myrtus-psm-edge
 **Upstream:** https://github.com/subhadeep-banik/spdocker
-**Port branch:** `al3monni-test-arm` · **x86 baseline:** `al3monni-test` (`ddb5f5f`), re-validated on the current tree
+**Branch:** `main` (the port branch, formerly `al3monni-test-arm`) · **x86 baseline:** `ddb5f5f`, re-validated on the current tree
 **Target hardware:** AMD/Xilinx Kria KV260 — Zynq UltraScale+ MPSoC, 4× Cortex-A53, aarch64
 **Cross-build host:** Windows + WSL2 (Ubuntu) + Docker Desktop, `linux/arm64` under QEMU
 **On-board host:** Ubuntu 22.04 IoT, Docker Engine, native aarch64 build
@@ -50,16 +50,22 @@ The order in which the eight backends are registered *is* the numbering: it deci
 
 | Path | Contents |
 |---|---|
-| `f1` … `f8` | the eight AES backends, one directory each, with their own Makefile and KAT |
-| `register.c` | compiles a backend, runs its KAT, checks for symbol clashes, installs the object |
-| `gen.c` | wraps a backend so its internal function name becomes the unique exported symbol |
-| `encrypt02.c` | the `dlopen`/`dlsym` selection machinery and the mode-byte decoding |
-| `server_f.c`, `cltest.c` | server and client |
-| `check1.c`, `check2.c` | KAT templates (AES-128 and AES-256) that `register` fills in per backend |
-| `cycles.h` | portable cycle counter — x86 `rdtscp` or ARM `cntvct_el0` |
-| `start.sh` | the container entrypoint pipeline above |
+| `src/server_f.c`, `src/cltest.c` | server and client |
+| `src/encrypt02.c` | the GCM mode around the selected backend, `dlopen`/`dlsym` and the mode-byte decoding |
+| `src/register.c`, `src/gen.c`, `src/reset.c` | registration: compile a backend, run its KAT, check for symbol clashes, give it its unique name, install the object |
+| `src/check1.c`, `src/check2.c` | KAT templates (AES-128 and AES-256) that `register` fills in per backend |
+| `src/profile01.c`, `src/internalprofile.c`, `src/ina260.h` | measurement: likwid and RAPL on x86-64, the INA260 on aarch64 |
+| `src/synthesize.c`, `src/send.c` | pick a backend from `db.yaml`, and deliver the new mode byte to the server |
+| `src/cycles.h` | portable cycle counter — x86 `rdtscp` or ARM `cntvct_el0` |
+| `src/start.sh` | the container entrypoint pipeline above |
+| `backends/f1` … `backends/f8` | the eight AES backends, one directory each, with their own Makefile |
+| `certs/` | the server's self-signed test certificate and its key |
+| `test/rfile` | the 10000-byte input of the round-trip test |
+| `tools/` | `bench_ina260.sh`, unattended measurement campaigns on the board, and `ina260_test.c`, a check of the power sensor |
 | `Dockerfile`, `compose-server.yml` | image definition and orchestration |
 | `LIB/` | created at build, populated at runtime — never committed |
+
+Inside the container everything is flat in `/app`: the Dockerfile copies `src/`, `backends/`, `certs/`, `test/rfile` and `tools/ina260_test.c` there, so `backends/f1` becomes `/app/f1` and `test/rfile` becomes `/app/rfile`. Every path in the commands below is a path in the container.
 
 ---
 
@@ -103,7 +109,6 @@ Every host builds for its own architecture by default, and all eight backends bu
 ```bash
 git clone https://github.com/mdc-suite/myrtus-psm-edge.git
 cd myrtus-psm-edge
-git checkout al3monni-test-arm
 
 docker compose -f compose-server.yml up --build
 ```
@@ -206,7 +211,7 @@ Expected: TCP `*:5544` and `*:5545`.
 
 ### 7. End-to-end round trip, on both security levels
 
-This is the test that actually proves correctness. `rfile` is a 10000-byte file committed for the purpose. Send it once per level and compare what the server saved byte for byte:
+This is the test that actually proves correctness. `rfile` is a 10000-byte file committed for the purpose (`test/rfile` in the repository). Send it once per level and compare what the server saved byte for byte:
 
 ```bash
 for p in "1 5544" "0 5545"; do set -- $p
@@ -236,6 +241,8 @@ A few things to know about this test:
 
 **Energy on x86-64 is per-core and needs bare metal.** likwid reads RAPL's per-core domain, which exists only when the kernel exposes the MSRs: not under WSL2, Docker Desktop or a virtual machine, and not with Secure Boot on. The figures rank the backends the same way as the board does, but they are single measurements, not a characterisation like the board's, and joules cannot be compared across the two platforms.
 
+**The test certificate is not verified.** The server presents a self-signed certificate (`certs/certfile.crt`, valid until 18 January 2027), and the client does not check it. Its expiry will therefore not break transfers, but it also means the client does not authenticate the server.
+
 **Two weaknesses inherited from upstream, left open.** Neither affects normal operation. `./send` accepts a mode byte of the wrong security level, and `./send 5545 98` puts the low-level port on an AES-256 backend, which breaks every transfer on it; `./synthesize` never does this. And the server writes decrypted data as it arrives and checks the authentication tag only at the end: on a mismatch it keeps the file and does not tell the client, which an AEAD should never do. `LOGBOOK.md` §9 describes both and how they could be closed.
 
 ---
@@ -253,6 +260,8 @@ Nothing about the application is baked into that snapshot. Every build step live
 ## Credits and licence
 
 This work is a port and extension of [spdocker](https://github.com/subhadeep-banik/spdocker) by Subhadeep Banik. See `LICENSE` for the original terms.
+
+The bitsliced backends (`backends/f3`, `backends/f6`) come from [bitsliced-aes](https://github.com/conorpp/bitsliced-aes) by Conor Patrick, whose repository declares no licence.
 
 The base image derives from AMD/Xilinx's Ubuntu 22.04 IoT image for Kria and contains Canonical- and AMD-licensed components, redistributed under their respective terms.
 

@@ -186,7 +186,6 @@ The first connection asks you to confirm GitHub's host key — type `yes` in ful
 ```bash
 git clone git@github.com:mdc-suite/myrtus-psm-edge.git
 cd myrtus-psm-edge
-git checkout al3monni-test-arm
 docker compose -f compose-server.yml up --build
 ```
 

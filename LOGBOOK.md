@@ -4,7 +4,7 @@ This document records **every** modification required to take the project from t
 
 **Repo:** https://github.com/mdc-suite/myrtus-psm-edge
 **Upstream:** https://github.com/subhadeep-banik/spdocker
-**Port branch:** `al3monni-test-arm` · **x86 baseline:** `al3monni-test` (`ddb5f5f`), re-validated on the current tree at `07ac3df` (§7)
+**Branch:** `main` (the port branch, called `al3monni-test-arm` until M-A20) · **x86 baseline:** `ddb5f5f` (formerly branch `al3monni-test`), re-validated on the current tree at `07ac3df` (§7)
 **Target hardware:** AMD/Xilinx Kria KV260 — Zynq UltraScale+ MPSoC, 4× Cortex-A53, aarch64
 **Cross-build host:** Windows + WSL2 (Ubuntu) + Docker Desktop, `linux/arm64` under QEMU
 **On-board host:** Ubuntu 22.04 IoT, Docker Engine, native aarch64 build
@@ -19,7 +19,7 @@ This document records **every** modification required to take the project from t
 
 ## 1. What this project is
 
-A TLS client/server shipping **8 interchangeable AES implementations**. At runtime the server selects one, loads it from a shared library via `dlopen`/`dlsym`, and uses it as the AEAD for file transfer. Selection is nominally driven by measured throughput/energy against a policy file.
+A TLS client/server shipping **8 interchangeable AES implementations**. At runtime the server selects one, loads it from a shared library via `dlopen`/`dlsym`, and uses it as the AEAD for file transfer. Selection is driven by measured time and energy against a policy given to `synthesize` (§8).
 
 As the **Privacy and Security Manager** of the MYRTUS edge layer, the component demonstrates *crypto-agility*: the cipher backing a secure channel is not fixed at compile time but chosen at runtime, so the security/performance/energy trade-off can be renegotiated as conditions on the node change.
 
@@ -67,7 +67,9 @@ Added to keep the build context small and avoid copying host cruft into the imag
 
 ## 4. Port modifications
 
-Each is a single, independently-validated change, in the order they surfaced during the cross-build. Filenames are relative to repo root. All were re-verified on the Kria board after the cross-build path was complete.
+Each is a single, independently-validated change, in the order they surfaced during the cross-build. Filenames are relative to repo root as it was at the time. All were re-verified on the Kria board after the cross-build path was complete.
+
+> **Paths.** Until M-A20 every file sat at the root of the repository. Since then the sources live in `src/`, the backends in `backends/fN`, the certificate in `certs/`, the tools in `tools/` and `rfile` in `test/`; inside the container everything is still flat in `/app`. The entries below keep the paths of their time.
 
 ### M-A1 — likwid: build the ARMv8 target [arm] · `Dockerfile`
 **Symptom:** the likwid layer fails compiling `access_x86_*.o` — its `make` defaults to `COMPILER = GCC`, which means *GCC-on-x86*; likwid couples compiler and architecture in one setting.
@@ -297,7 +299,7 @@ The workload runs for a fixed *time* rather than a fixed iteration count because
 
 **Requirements.** The container must see `/sys/class/hwmon`, which it does because `compose-server.yml` runs it privileged. For reference-grade numbers the board should be otherwise idle: `unattended-upgrades`, `anacron`, `dpkg-db-backup` and `logrotate` timers wake up on their own and are worth stopping for the duration of a measurement campaign.
 
-**Tools.** `ina260_test.c` is a standalone check of the sampler: it prints sampling statistics, idle power and the delta of one busy core. `bench_ina260.sh` runs unattended campaigns (round-robin measurements, idle tracking, a spin-loop reference and periodic full walks) and writes a csv plus a rolling summary.
+**Tools** (in `tools/` since M-A20). `ina260_test.c` is a standalone check of the sampler: it prints sampling statistics, idle power and the delta of one busy core. `bench_ina260.sh` runs unattended campaigns (round-robin measurements, idle tracking, a spin-loop reference and periodic full walks) and writes a csv plus a rolling summary.
 
 ### M-A15 — one source per backend, two instruction sets [both] · `f7/aes128.c`, `f8/aes256.c`, `f7/Makefile`, `f8/Makefile` · `13dd6af`
 **Symptom:** M-A8 and M-A9 *replaced* the AES-NI implementations instead of adding to them, so after the port f7 and f8 built only on aarch64. A registration walk on x86-64 registers six backends instead of eight: `gcc` there rejects `-march=armv8-a+crypto` and has no `<arm_neon.h>`. The port had quietly traded one architecture for the other.
@@ -392,6 +394,35 @@ In both cases `gen.c` already does the right thing with a non-zero status (M-A7)
 
 **Validated:** a normal walk still registers eight backends with no zero energy. With the `msr` module unloaded, registering f1 fails within seconds with `profile: likwid cannot start the ENERGY counters on cpu 0, enc_s01_n01 not measured`, `header.h` stays at `///1-00` and `db.yaml` stays empty. The Secure Boot case itself is fixed on the host, not in the code (§5c).
 
+### M-A20 — branches, cleanup and repository layout [both] · `655b706`, `f9b0579`, `dbd62c2`
+Once both architectures were validated, the repository was reduced to what the component needs and given a layout a reader can follow.
+
+**Branches.** `al3monni-test-arm` was renamed `main` and is the default branch. The two others were deleted: the old `main`, upstream's state (`70d30c4`), and `al3monni-test`, the x86 baseline (`ddb5f5f`). Both heads are ancestors of the new `main`, so no commit was lost and every hash in this logbook still resolves.
+
+**Build artefacts** (`655b706`). The backend directories carried 14 object files, 2 static libraries and 12 x86 test binaries, committed before `.gitignore` existed, plus an empty stray file. `register` deletes and rebuilds every object before use, so nothing read them. `header.h` left git too: `reset` rewrites it at every container start, and it is now in `.gitignore`.
+
+**Unused sources** (`f9b0579`), none of them referenced by a Makefile, the Dockerfile or an `#include`:
+- `recv.c`, `recv1.c` and `send.c`, older transfer utilities (the one built was `send1.c`);
+- `crypto_aead.h` and `crypto_aead_aes256gcmv1.h`, which no file includes;
+- `config.txt`, upstream's policy file, which nothing reads: the policy is the arguments of `synthesize` (§8);
+- `f1/wm.c` and `f4/wm.c`;
+- in f2/f5, the `.s` listings, `check.c` and `src/`, the "learning purposes" AES that `a.c` derives from;
+- in f3/f6, the bitsliced library's own benchmark, tests, debug helpers (`utils.c`; `utils.h` stays, `aes.c` includes it) and test harness.
+
+**Layout** (`dbd62c2`):
+
+```
+src/        the component: server, client, encrypt02, registration, measurement, synthesize, send, start.sh, Makefiles
+backends/   f1 … f8
+certs/      certfile.crt, keyfile.key
+tools/      bench_ina260.sh, ina260_test.c
+test/       rfile
+```
+
+The image keeps the flat `/app` the pipeline expects. The Dockerfile copies each directory into `/app` instead of `COPY . .`, so `start.sh`, `register`, `gen` and the backends' `config.txt` (`Makefile_Path : ./f1` …) did not change. `send1.c` became `send.c`; `bench_ina260.sh` looks for the repository one level up; `.dockerignore` excludes object files at any depth (`**/*.o`), where `*.o` only matched the root. The contents of `/app` were checked file by file against the previous image before the change.
+
+**Validated:** on the x86-64 host and on the board, eight backends registered, eight entries in `db.yaml`, both security levels byte-identical.
+
 ---
 
 ## 5. Host prerequisites
@@ -474,7 +505,6 @@ Since the base image is itself the Kria arm64 rootfs (§11), the cross-build pul
 
 ```bash
 cd ~/myrtus/myrtus-psm-edge
-git checkout al3monni-test-arm
 
 # one-time per WSL VM (see §5a)
 docker run --privileged --rm tonistiigi/binfmt --install arm64
@@ -501,7 +531,6 @@ No buildx, no binfmt, no `--platform` — on native aarch64 all three are redund
 ```bash
 git clone https://github.com/mdc-suite/myrtus-psm-edge.git
 cd myrtus-psm-edge
-git checkout al3monni-test-arm
 
 docker compose -f compose-server.yml up --build
 ```
@@ -515,7 +544,6 @@ After the prerequisites of §5c, the same command as on the board, with no build
 ```bash
 git clone https://github.com/mdc-suite/myrtus-psm-edge.git
 cd myrtus-psm-edge
-git checkout al3monni-test-arm
 
 sudo modprobe msr
 docker compose -f compose-server.yml up --build
@@ -560,7 +588,7 @@ docker exec Test-server sh -c 'lsof -i -P -n | grep LISTEN'       # *:5544, *:55
 
 ### End-to-end round trip
 
-The authoritative correctness test is a file transfer compared byte for byte, **on both security levels**. `rfile` (10000 bytes) is committed in the repo for this purpose.
+The authoritative correctness test is a file transfer compared byte for byte, **on both security levels**. `rfile` (10000 bytes, `test/rfile` in the repository) is committed for this purpose.
 
 | level | client | port | cipher |
 |---|---|---|---|
@@ -643,20 +671,22 @@ Because every backend of a level computes the same function, any of them interop
 
 ### Implementation map — the contract (post-port)
 
+Directories are under `backends/` since M-A20.
+
 | dir | function | build flags (aarch64) | → symbol | notes |
 |---|---|---|---|---|
 | f1 | `aes128` | plain C | `enc_s01_n01` | reference AES-128 |
-| f2 | `AES_enc` | plain C | `enc_s01_n02` | `.s` file present but **unused** by Makefile |
+| f2 | `AES_enc` | plain C | `enc_s01_n02` | initial backend of port 5545 (M-A18) |
 | f3 | `aes_ecb_encrypt` | `-DUNROLL_TRANSPOSE` (bitsliced) | `enc_s01_n03` | pure C, ports free |
 | f7 | `aes128` | **`-march=armv8-a+crypto`** (x86-64: `-maes -msse4.1`) | `enc_s01_n04` | **M-A8/M-A10/M-A15** — AES-NI and ARMv8 CE in one source, chosen by `uname -m` |
 | f4 | `aes256` | plain C | `enc_s02_n01` | reference AES-256 |
-| f5 | `AES256_enc` | plain C | `enc_s02_n02` | **default target**; `.s` present but unused |
+| f5 | `AES256_enc` | plain C | `enc_s02_n02` | upstream's **default target**, initial backend of port 5544 |
 | f6 | `aes256_ecb_encrypt` | bitsliced | `enc_s02_n03` | pure C, ports free |
 | f8 | `aes256` | **`-march=armv8-a+crypto`** (x86-64: `-maes -msse4.1`) | `enc_s02_n04` | **M-A9/M-A10/M-A15** — AES-NI and ARMv8 CE in one source, chosen by `uname -m` |
 
 Registration order **is** the numbering — the table above is a contract, not a description. The client does not depend on it, since it never loads `lib_enc.so`. What depends on it is everything that names a backend by number: the initial modes in `server_f.c` (M-A18), any value passed to `send` by hand, and this table. Reordering the `register` calls in `start.sh` keeps every transfer correct, because the level does not change, but silently changes which implementation a given code selects.
 
-The f2/f5 `.s`-assembly concern from the original scope was resolved by observation: both Makefiles compile the C source directly and never assemble the `.s` files, so **no ARMv8 assembly rewrite was needed**.
+The f2/f5 `.s`-assembly concern from the original scope was resolved by observation: both Makefiles compile the C source directly and never assemble the `.s` files, so **no ARMv8 assembly rewrite was needed**. The `.s` files were removed in M-A20.
 
 Symbol coexistence works because `gen.c`→`generate` wraps each implementation: `#define <fn> enc_sXX_nYY` + `#include` → `gcc -E -P` → fully-preprocessed `source.c` → object renamed into `LIB/`. That is why eight implementations with (previously) identical internal function names can share one `.so` — and why the f7/f8 *global tables* still needed the M-A10 rename, since globals survive preprocessing untouched.
 
@@ -710,11 +740,13 @@ Issues 1 and 2 were architectural, not defects introduced by the port, and are n
 
 **7. Cross-build path on WSL2 not re-run since M-A16.** The QEMU column of §7 predates M-A16 and M-A18. The cross-build now needs `DOCKER_DEFAULT_PLATFORM=linux/arm64` (§6a), which has not been exercised yet.
 
+**8. Test certificate (secondary).** `certs/certfile.crt` is self-signed and valid until 18 January 2027. The client does not verify it, so its expiry will not break transfers, but the client does not authenticate the server either. A certificate the client actually checks is the fix; renewing this one only moves the date.
+
 ---
 
-## 10. Commit trail (branch `al3monni-test-arm`)
+## 10. Commit trail (branch `main`)
 
-Oldest first. `git log --oneline --graph al3monni-test-arm` is the authoritative sequence.
+Oldest first. `git log --oneline --graph main` is the authoritative sequence. The branch was called `al3monni-test-arm` until M-A20.
 
 | commit | change | modification |
 |---|---|---|
@@ -746,8 +778,13 @@ Oldest first. `git log --oneline --graph al3monni-test-arm` is the authoritative
 | `a7fc710` | `start.sh` creates `Downloads/` before starting the server | M-A17 |
 | `eb16eb4` | each port starts on a backend of its own security level | M-A18 |
 | `07ac3df` | x86-64 profiling fails instead of hanging or registering zeros | M-A19 |
+| `9f04855` | LOGBOOK: dual-architecture validation | — |
+| `88c9b60` | README updated for both architectures | — |
+| `655b706` | build artefacts and `header.h` untracked | M-A20 |
+| `f9b0579` | sources nothing builds or includes removed | M-A20 |
+| `dbd62c2` | repository organised into `src/`, `backends/`, `certs/`, `tools/`, `test/` | M-A20 |
 
-The ARM work falls into four phases: **make it build** (`9207e41` … `c992b51`), **make it register and run correctly** (`af69ca9` … `9a902ab`), **move it onto the board's own userspace** (`e5edc89` … `ad1385f`), and **clean up and correct the base** (`dc78a00` … `66baa82`). A fifth, **measure and validate on both architectures** (`7debc15` … `07ac3df`), brought the INA260 energy path and the first bare-metal x86-64 validation of the current tree.
+The ARM work falls into four phases: **make it build** (`9207e41` … `c992b51`), **make it register and run correctly** (`af69ca9` … `9a902ab`), **move it onto the board's own userspace** (`e5edc89` … `ad1385f`), and **clean up and correct the base** (`dc78a00` … `66baa82`). A fifth, **measure and validate on both architectures** (`7debc15` … `07ac3df`), brought the INA260 energy path and the first bare-metal x86-64 validation of the current tree. A sixth, **clean up the repository** (`655b706` … `dbd62c2`), left only what the component needs.
 
 ---
 

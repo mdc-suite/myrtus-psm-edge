@@ -1,3 +1,5 @@
+> **Source.** Vendored from [conorpp/bitsliced-aes](https://github.com/conorpp/bitsliced-aes) by Conor Patrick, used here as backend f3 (AES-128). The upstream repository declares no licence. Only the files the backend builds are kept here; the library's benchmark, tests and debug helpers were removed (LOGBOOK M-A20), so the build instructions below refer to the original repository.
+
 Bitsliced AES
 -------------
 
