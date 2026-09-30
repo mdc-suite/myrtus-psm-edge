@@ -7,8 +7,8 @@
 # NOTE: LIB/ is excluded wholesale (the committed .o/.so are stale x86-64
 # artefacts). The Dockerfile must therefore mkdir it — see below.
 LIB/
-*.o
-*.a
+**/*.o
+**/*.a
 test1.c
 test2.c
 header1.h

@@ -42,8 +42,13 @@ RUN tar -xaf likwid-5.5.1.tar.gz \
 
 ENV LD_LIBRARY_PATH=:/app/LIB
 
-# copy all files from current directory inside the build-env container
-COPY . .
+# lay the sources out flat in /app, as the pipeline expects them:
+# start.sh, register, gen and the backends' config.txt all use paths relative to /app
+COPY src/ ./
+COPY backends/ ./
+COPY certs/ ./
+COPY test/rfile ./
+COPY tools/ina260_test.c ./
 
 RUN mkdir -p /app/LIB
 RUN gcc reset.c -o reset
@@ -52,7 +57,7 @@ RUN gcc -o register register.c
 RUN gcc -o synthesize synthesize.c -lm
 RUN make server
 RUN make -f makeclient
-RUN gcc send1.c -o send
+RUN gcc send.c -o send
 
 # set permissions for start.sh script
 RUN chmod 777 start.sh

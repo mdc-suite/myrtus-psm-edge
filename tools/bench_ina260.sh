@@ -28,7 +28,7 @@ CT=Test-server                  # container name
 RUN_S=3                         # workload window per measurement, s
 WALK_EVERY=${2:-6}              # full walk every N cycles (2nd argument)
 IDLE_SAMPLES=20                 # idle samples per cycle, 0.5 s apart
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"   # this script lives in tools/
 
 CSV_HDR="ts,iso,phase,cycle,backend,idle_pre_w,idle_post_w,h1_w,h2_w,dev_mw,dp_w,time50k_s,energy50k_j,iters,window_s,attempts,t_lpd_c,t_fpd_c,t_pl_c,pwm"
 
