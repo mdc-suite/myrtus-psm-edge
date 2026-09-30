@@ -9,7 +9,7 @@ This logbook records the modifications that took **spdocker** from an x86-only p
 | **Target hardware** | Kria KV260 — Zynq UltraScale+ MPSoC, 4× Cortex-A53, aarch64, Ubuntu 22.04 IoT |
 | **Hosts** | the board itself (native aarch64 build) · bare-metal x86-64 Linux (native amd64 build) |
 | **Base image** | [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu) on aarch64, `ubuntu:22.04` on x86-64, chosen automatically (§12) |
-| **Status** | ✅ Validated on both architectures at `dbd62c2`: eight backends registered and measured, byte-identical round trips on both security levels |
+| **Status** | ✅ Validated on both architectures at `c0c0065`: eight backends registered and measured, byte-identical transfers on both security levels for files of every size, runtime switch working |
 
 ### How to read the modifications
 
@@ -356,7 +356,7 @@ The client sends the ciphertext in 1024-byte records, followed by the 16-byte ta
 - **File size + 16 a multiple of 1024** (1008, 2032, … bytes). The tag fills the end of the last full record, and the closing branch wrote its decryption to the file and left its block in the GHASH: 16 extra bytes and `TAG MISMATCH`. The server now drops that block from the message instead.
 - **Empty file.** The client started `outlen` at 1024 and sent 1024 uninitialised bytes before the tag, and the server trimmed a previous record that did not exist. The client now starts at 0, and the server trims only after a record.
 
-**Validated** on x86-64 with 18 sizes from 0 bytes to 1 MiB, every boundary around 1024 and 2048 included, on both levels: 36 of 36 transfers byte-identical and without `TAG MISMATCH`, against 30 before. A client that alters one byte of the data or of the tag is flagged in all 36.
+**Validated** with 18 sizes from 0 bytes to 1 MiB, every boundary around 1024 and 2048 included, on both levels: on both architectures, 36 of 36 transfers byte-identical and without `TAG MISMATCH`. On x86-64, where the sizes were first run, 30 passed before the fix, and a client that alters one byte of the data or of the tag is flagged in all 36.
 
 #### 🟡 M18 · Make the OpenSSL path (mode 0) work
 `both` · `src/server_f.c` · `7440efc`
@@ -368,7 +368,7 @@ The client sends the ciphertext in 1024-byte records, followed by the 16-byte ta
 
 `encrypt02.c` can take a block back out of its GHASH (M17); OpenSSL cannot. This path therefore holds the last 16 bytes back still encrypted, and decrypts them only once the next record shows they are data. It passes the tag before `EVP_DecryptFinal` and reports `TAG MISMATCH` like the backend path.
 
-**Validated** on x86-64 with the sizes of M17: 36 of 36 transfers byte-identical, against 18 before; a tampered transfer is flagged in 36 of 36, against none before.
+**Validated** with the sizes of M17: on both architectures, 36 of 36 transfers byte-identical, all decrypted by OpenSSL. On x86-64, 18 passed before the fix, and a tampered transfer is flagged in 36 of 36, against none before.
 
 ---
 
