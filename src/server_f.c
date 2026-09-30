@@ -170,7 +170,7 @@ void createserver(int port)
        while (SSL_read_ex(ssl, buffer, CHUNK_SIZE, &readbytes) > 0) {
             if(readbytes==CHUNK_SIZE){
             if(ct) fwrite(outmsg+CHUNK_SIZE-TAGSIZE, TAGSIZE,1, fd);
-            if (dec_update(cx, outmsg, &outlen, buffer, CHUNK_SIZE)) {
+            if (dec_update(cx, outmsg, buffer, CHUNK_SIZE)) {
             fprintf(stderr, "Failed Decrypt update\n");
 
             goto outg;
@@ -194,7 +194,7 @@ void createserver(int port)
                        memcpy(cx->accum, cx->paccum,16);
                        
                   }
-             if(readbytes>TAGSIZE){dec_update(cx, outmsg, &outlen, buffer, readbytes-TAGSIZE);
+             if(readbytes>TAGSIZE){dec_update(cx, outmsg, buffer, readbytes-TAGSIZE);
  
              fwrite(outmsg,readbytes-TAGSIZE,1, fd);
              memcpy(tag,buffer+readbytes-TAGSIZE, TAGSIZE);
