@@ -8,7 +8,7 @@ CFLAGS       = -w -Wno-incompatible-pointer-types -lcrypto -lssl -ldl -rdynamic
 #CFLAGS       = -w -Wno-incompatible-pointer-types -lcrypto -lssl  -L$(LIBF) -l_enc -ldl -rdynamic 
  
  
-client :  encrypt02.c cltest.c
+client :  cltest.c
 	$(CC) -o $@ $^ $(CFLAGS)  
 
  
