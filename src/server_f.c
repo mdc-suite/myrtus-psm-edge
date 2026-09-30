@@ -23,7 +23,6 @@
 #include <sys/types.h>
 #include <dirent.h>
 
-#include "cycles.h" // al3monni mod
 
 #define fbits(y)  ((y) & 0xc0)>>6
 #define sbits(y)  ((y) & 0x30)>>4
@@ -343,7 +342,7 @@ void createserver(int port)
         } 
         if(mode==0){
 
-        printf("From openssl native GCM\n");ts1=rdtscp();       
+        printf("From openssl native GCM\n");       
         if (evp == NULL) {
         	fprintf(stderr, "No evp!\n");
         	ERR_print_errors_fp(stderr);

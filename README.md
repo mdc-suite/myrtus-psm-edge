@@ -128,7 +128,6 @@ Nothing runs `synthesize` automatically: today the selection is a manual step.
 | `src/server_f.c`, `src/cltest.c`, `src/Makefile`, `src/makeclient` | server and client, and their build (§3, §4) |
 | `src/encrypt02.c` | the GCM mode around the selected backend, and the mode decoding |
 | `src/synthesize.c`, `src/send.c` | backend selection and delivery of the new mode (§5) |
-| `src/cycles.h` | a cycle counter left from upstream; no measurement uses it |
 | `backends/f1` … `backends/f8` | the eight AES backends, one directory each, with their own Makefile and `config.txt` |
 | `certs/` | the server's self-signed test certificate and its key |
 | `test/rfile` | the 10000-byte input of the round-trip test |

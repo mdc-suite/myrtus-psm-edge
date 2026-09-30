@@ -12,7 +12,7 @@
  * which is system-wide: a child process (or a process in a container on the
  * same kernel) can report its own window and the parent integrates over it.
  *
- * Header-only, like cycles.h, so profile01.c still builds as a single file.
+ * Header-only, so profile01.c still builds as a single file.
  * Link with -pthread.
  */
 #ifndef INA260_H
