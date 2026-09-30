@@ -1,8 +1,10 @@
 # Kria KV260 — board bring-up
 
-Everything needed to take a Kria KV260 Starter Kit from an empty microSD to a board that can build and run this project. Once you reach the end, continue with [`README.md`](README.md).
+Everything needed to take a Kria KV260 Starter Kit from an empty microSD to a board that builds and runs this project. Once you reach the end, continue with [`README.md`](README.md).
 
-This guide assumes a Windows host with WSL2, since that is what the project was developed on and because the network setup below relies on Windows Internet Connection Sharing. On a Linux host the flashing and serial steps are equivalent; only the networking section differs.
+The board is a test target: it clones the repository, builds the container and runs it. Development happens elsewhere, so the board only ever needs to *read* the repository.
+
+This guide assumes a Windows host, because the network setup below relies on Windows Internet Connection Sharing. On a Linux host the flashing and serial steps are equivalent; only the networking section differs.
 
 ---
 
@@ -12,7 +14,7 @@ This guide assumes a Windows host with WSL2, since that is what the project was 
 - **microSD card**, 32 GB or larger — the OS image plus the container images will use most of it
 - **USB-A to micro-USB cable** for the serial console
 - **Ethernet cable** between the board and the host PC
-- On the host: [balenaEtcher](https://etcher.balena.io/), [PuTTY](https://www.putty.org/), and WSL2
+- On the host: [balenaEtcher](https://etcher.balena.io/), [PuTTY](https://www.putty.org/), and [7-Zip](https://www.7-zip.org/) to decompress the image
 
 ### Boot firmware
 
@@ -26,13 +28,7 @@ Download the **Certified Ubuntu 22.04 LTS for AMD** image for Kria from <https:/
 
 The file arrives compressed as `.img.xz`. **Decompress it before flashing.** balenaEtcher advertises streaming decompression, but on this image it reliably fails partway through, and the failure is not always obvious — you can end up with a card that flashes "successfully" and does not boot.
 
-From WSL:
-
-```bash
-unxz -kv <image-name>.img.xz
-```
-
-The `-k` keeps the compressed original in case you need to flash again. Then point balenaEtcher at the resulting `.img` and write it to the microSD.
+On Windows, right-click the file and extract it with 7-Zip (*Extract Here*); on Linux, `unxz -kv <image-name>.img.xz` does the same and keeps the compressed original. Then point balenaEtcher at the resulting `.img` and write it to the microSD.
 
 ---
 
@@ -148,7 +144,7 @@ curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker $USER
 ```
 
-Docker Desktop has no aarch64 build; Docker Engine is what you want here, and the convenience script installs it directly.
+The convenience script installs Docker Engine and the compose plugin.
 
 The group change does **not** apply to your current session. Log out and back in, then confirm:
 
@@ -162,14 +158,19 @@ If you get `permission denied while trying to connect to the Docker API`, the se
 
 ## 7. Git access
 
-The project repository is private, so cloning needs credentials. Over the life of this board you will push from it repeatedly, so an SSH key is less friction than re-entering a token:
+The board only clones and pulls; it never pushes. What it needs depends on the repository's visibility:
+
+- **Public repository:** nothing. Clone over HTTPS, as in §8.
+- **Private repository:** give the board a key with **read-only** access to this repository alone, i.e. a *deploy key*.
+
+To create the key on the board:
 
 ```bash
 ssh-keygen -t ed25519 -C "kria-board"
 cat ~/.ssh/id_ed25519.pub
 ```
 
-Press Enter at both prompts to accept the default path and no passphrase. Copy the entire printed line — key type, key body and comment — into **GitHub → Settings → SSH and GPG keys → New SSH key**. The `.pub` file is the public half and is meant to be shared; the file without the extension is the private key and never leaves the board.
+Press Enter at both prompts to accept the default path and no passphrase. Copy the entire printed line — key type, key body and comment — into the repository's **Settings → Deploy keys → Add deploy key**, and leave *Allow write access* unchecked. The `.pub` file is the public half and is meant to be shared; the file without the extension is the private key and never leaves the board.
 
 Verify:
 
@@ -177,25 +178,25 @@ Verify:
 ssh -T git@github.com
 ```
 
-The first connection asks you to confirm GitHub's host key — type `yes` in full. Success looks like a greeting telling you that GitHub does not provide shell access; that message is the expected result, not an error.
+The first connection asks you to confirm GitHub's host key — type `yes` in full. Success is a greeting telling you that GitHub does not provide shell access; that message is the expected result, not an error.
 
 ---
 
-## 8. Build the project
+## 8. Build and run the project
 
 ```bash
-git clone git@github.com:mdc-suite/myrtus-psm-edge.git
+git clone https://github.com/mdc-suite/myrtus-psm-edge.git     # private repository: git@github.com:mdc-suite/myrtus-psm-edge.git
 cd myrtus-psm-edge
 docker compose -f compose-server.yml up --build
 ```
 
-From here, follow [`README.md`](README.md) for what a successful build looks like and how to validate it.
+To test a newer version later, `git pull` and run the same `docker compose` command again. From here, follow [`README.md`](README.md) for what a successful start looks like and how to run the tests.
 
 Expect the first build to take around ten minutes and to pull a couple of GB for the base image. Keep an eye on free space — `df -h /` — since the OS, the base image and the built application together will use a substantial share of a 32 GB card.
 
 ---
 
-## Checking the power sensor
+## 9. Check the power sensor
 
 The energy measurement on ARM reads the SOM's INA260 (LOGBOOK M12). Two commands confirm it is exposed on the image you flashed:
 
@@ -217,7 +218,7 @@ sudo systemctl stop unattended-upgrades.service anacron.timer dpkg-db-backup.tim
 
 ---
 
-## Troubleshooting
+## 10. Troubleshooting
 
 **Nothing appears in PuTTY.** Wrong COM port (use the second one), or flow control left at XON/XOFF. Press Enter a couple of times in case the board has already finished booting.
 
