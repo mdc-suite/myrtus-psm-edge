@@ -313,7 +313,7 @@ docker logs --tail 10 Test-server | grep "Starting with"
 ```
 
 Expected:
-- `synthesize` prints `enc_s01_n04` and `./send 5545 84` (84 = `0x54`: encryption, level 1, index 4), and `send` reports the process it signalled;
+- `synthesize` prints `enc_s01_n04` and `./send 5545 84` (84 = `0x54`: encryption, level 1, index 4), and `send` reports the process it signalled. The lines of `send` usually come out first: `synthesize` prints through a buffer that is emptied only when it exits;
 - the server log shows `Recieved signal 84` and `Switching to enc_s01_n04`;
 - the transfer is `IDENTICAL`, and the log reads `Starting with enc_s01_n04`.
 

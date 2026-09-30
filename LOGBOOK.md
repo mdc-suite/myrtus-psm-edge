@@ -513,9 +513,10 @@ Three things to know about this test:
 | `db.yaml` | 8 entries, no zero energy | ✅ INA260 | ✅ RAPL |
 | Round trip, high (`-s 1`, 5544) | `10016 bytes`, `cmp` identical | ✅ | ✅ |
 | Round trip, low (`-s 0`, 5545) | `10016 bytes`, `cmp` identical | ✅ since M14 | ✅ since M14 |
+| Runtime switch (`synthesize -s 1 -t 0 -e 0`, then a transfer on 5545) | `Switching to enc_s01_n04`, `Starting with enc_s01_n04`, `cmp` identical | ✅ | ✅ |
 | AES instructions in `/proc/cpuinfo` | `aes pmull sha1 sha2` | ✅ | n/a |
 
-The x86-64 column was validated on an AMD Ryzen 5 3500U (Zen+) with the prerequisites of §5b.
+The x86-64 column was validated on an AMD Ryzen 5 3500U (Zen+) with the prerequisites of §5b. The commands of the runtime-switch test are in the README, under *Tests*.
 
 ---
 
