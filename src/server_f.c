@@ -2,116 +2,30 @@
 #include <unistd.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <sys/time.h>
 #include <arpa/inet.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
-#include <openssl/hmac.h>
 #include <openssl/evp.h>
-#include <unistd.h>
 #include <signal.h>
-#include <openssl/bio.h>
-#include <openssl/kdf.h>
-#include <openssl/core_names.h>
-#include <openssl/params.h>
-#include <openssl/rand.h>
 #include <stdlib.h>
 #include "crypto_aead256.h"
 #include <time.h>
 #include <sys/stat.h>    
 #include <stdbool.h>  
-#include <sys/types.h>
-#include <dirent.h>
 
 
-#define fbits(y)  ((y) & 0xc0)>>6
 #define sbits(y)  ((y) & 0x30)>>4
 #define ibits(y)  ((y) & 0x0f) 
 
 #define CHUNK_SIZE 1024
 #define TAGSIZE 16
-volatile int fs=0;
-void fshandler(int sig)
-{  if (sig == SIGUSR2)
-    {
-    fs=1-fs;
-    }
-}
 
 bool file_exists (char *filename) {
   struct stat   buffer;   
   return (stat (filename, &buffer) == 0);
 }
 
-unsigned char* read_unknown_stream(SSL *ssl, size_t *total_len) {
-    unsigned char chunk[CHUNK_SIZE];
-    size_t bytes_read = 0;
-    
-    unsigned char *full_buffer = NULL;
-    *total_len = 0;
-
-    while (1) {
-        // This blocks until data arrives or connection closes
-        int status = SSL_read_ex(ssl, chunk, CHUNK_SIZE, &bytes_read);
-
-        if (status > 0) {
-            // 1. Expand the main buffer to hold new data
-            char *new_ptr = realloc(full_buffer, *total_len + bytes_read);
-            if (!new_ptr) {
-                // Out of memory error handling
-                free(full_buffer);
-                return NULL;
-            }
-            full_buffer = new_ptr;
-
-            // 2. Copy chunk into the main buffer
-            memcpy(full_buffer + *total_len, chunk, bytes_read);
-            *total_len += bytes_read;
-
-            // 3. OPTIONAL: Check application protocol layer
-            // if (is_http_body_finished(full_buffer, *total_len)) break;
-
-        } else {
-            // status <= 0 means stream paused, ended, or failed
-            int err = SSL_get_error(ssl, status);
-
-            if (err == SSL_ERROR_ZERO_RETURN) {
-                // Clean close: The peer closed the TLS connection.
-                // This is our natural exit point if reading a raw stream.
-                break; 
-            } 
-            else if (err == SSL_ERROR_SYSCALL || err == SSL_ERROR_SSL) {
-                // Fatal error: Network dropped, timeout, or TLS protocol error
-                free(full_buffer);
-                return NULL;
-            }
-        }
-    }
-
-    return full_buffer;
-}
  volatile int mode=98;
-// al3monni mod
-/*  extern inline __attribute__((always_inline)) unsigned long rdtscp()
-{
-   unsigned long a, d, c;
-
-   __asm__ volatile("rdtscp" : "=a" (a), "=d" (d), "=c" (c));
-
-   return (a | (d << 32));
-} */
-void handleErrors(void)
-{
-    unsigned long errCode;
-
-    printf("An error occurred\n");
-    while(errCode = ERR_get_error())
-    {
-        char *err = ERR_error_string(errCode, NULL);
-        printf("%s\n", err);
-    }
-    abort();
-}
 
 void signal_handler(int signo, siginfo_t *info, void *context) {
  
@@ -148,16 +62,15 @@ void configure_context(SSL_CTX *ctx)
 
 void createserver(int port)
 {
-    int sock,decbytes,part,kbyte=0;   unsigned long long ts2,ts1;
-    SSL_CTX *ctx;    BIO *b64 = NULL;
-    BIO *web = NULL, *fout = NULL;
-    unsigned char buffer [CHUNK_SIZE] ;unsigned char *b2;size_t  readbytes;
+    int sock,part,kbyte=0;
+    SSL_CTX *ctx;
+    unsigned char buffer [CHUNK_SIZE] ;size_t  readbytes;
     unsigned char iv[16],tag[2*TAGSIZE],*tp;    EVP_CIPHER *evp = NULL;
     unsigned char key[32];EVP_CIPHER_CTX *ctxx;
-    unsigned char *outmsg, receive[1024];
+    unsigned char *outmsg;
     char filename[1024];
-    int outlen =0,ret,i,nread;
-    int tmplen = 0,bytesread,ct=0;
+    int outlen =0,ret;
+    int ct=0;
     FILE *fd;
     EDcontext *cx;    
     time_t start_time,curr_time;
@@ -175,8 +88,6 @@ void createserver(int port)
 	SSL_CTX_set_min_proto_version(ctx, TLS1_3_VERSION);
 	SSL_CTX_set_max_proto_version(ctx, TLS1_3_VERSION);    
 	 
-        if(port==5544)SSL_CTX_set_cipher_list(ctx, "ECDHE-ECDSA-AES256-GCM-SHA384");
-        else         SSL_CTX_set_cipher_list(ctx, "DHE-RSA-AES128-GCM-SHA256");
     configure_context(ctx);
 
     struct sockaddr_in addr;
@@ -191,15 +102,9 @@ void createserver(int port)
         exit(EXIT_FAILURE);
     }
     unsigned int a = 655350000; 
-    struct timeval delay ; 
-    delay.tv_sec=2;
-        delay.tv_usec=2;
     if (setsockopt(sock, SOL_SOCKET, SO_RCVBUFFORCE, &a, sizeof(unsigned int)) == -1) {
     fprintf(stderr, "Error setting socket opts: %s\n", strerror(errno));
 }
- //    if(setsockopt(sock, SOL_SOCKET,SO_RCVTIMEO, &delay, sizeof(delay)) == -1) {
-// fprintf(stderr, "Error setting socket opts: %s\n", strerror(errno));
- //} 
     if (bind(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         perror("Unable to bind");
         exit(EXIT_FAILURE);
@@ -209,13 +114,11 @@ void createserver(int port)
         perror("Unable to listen");
         exit(EXIT_FAILURE);
     }
-    while((nread = read(sock, receive, sizeof(receive)-1)) > 0) ;
     while(1) {
         struct sockaddr_in addr;
         unsigned int len = sizeof(addr);
         SSL *ssl;
 
-        //printf("Current value of mode at port %d is %d \n", port,mode);
         int client = accept(sock, (struct sockaddr*)&addr, &len);
         if (client < 0) {
             perror("Unable to accept");
@@ -242,7 +145,6 @@ void createserver(int port)
             int rs = SSL_export_keying_material(ssl,out, 64 , klabel, strlen(klabel),context, strlen(context), 1);
             if (rs == 1) {
                 for (size_t i = 0; i < 64; ++i) {
-                     //printf("%02X ", out[i]);
                      if (i<32) key[i] = out[i];
                      if (i>=32 && i<48) iv[i-32] = out[i]; 
                   }
@@ -250,21 +152,6 @@ void createserver(int port)
             } else {
                 printf("error getting ekm\n");
             }
-        //buffer =   read_unknown_stream(ssl,&readbytes); 
-        //printf("readbytes=%ld\n",readbytes);
-        //for(i=0;i<readbytes;i++) printf("%02x ", *((unsigned char *)buffer+i)  );printf("\n");
-        //getchar();
-        //SSL_read_ex(ssl, buffer, 1024, &readbytes);
-       // memcpy(tag, buffer +readbytes-TAGSIZE,TAGSIZE);  
- 
-        //b64 = BIO_new(BIO_f_base64());
-       /* if ((b64 == NULL)
-            || (BIO_push(b64, BIO_new_fp(stdout, BIO_NOCLOSE)) == NULL)
-            || (BIO_write(b64, buffer,  readbytes ) <= 0)
-            || (BIO_flush(b64) == -1)) {
-            fprintf(stderr, "Failed to write base64 data\n");
-            goto outg;
-        }  */  
  
          if(port==5544) 
          evp = EVP_CIPHER_fetch(NULL, "AES-256-GCM", NULL);
@@ -273,34 +160,26 @@ void createserver(int port)
          
          outmsg = (unsigned char *) malloc (CHUNK_SIZE);
          tp=tag;
-         //memset(outmsg, 0, readbytes );
         
          if(mode!=0){
         printf("From external GCM\nStarting with enc_s%02d_n%02d\n", sbits(mode),ibits(mode));
                 start_time=time(NULL);	
-             /* ts1    = rdtscp();
-              if(crypto_aead_aes256gcmv1_ref_decrypt(outmsg, &decbytes, NULL,buffer , readbytes, NULL, 0, iv, key)==-1)
-                 fprintf(stdout, "TAG mismatch\n");
-              else
-                 fprintf(stdout, "Output message is: %s\n", outmsg);   
-                 ts2    = rdtscp();*/
          cx=(EDcontext *) malloc(sizeof(EDcontext));        
          ed_init( cx,  iv , (unsigned char *)key );
           ct=0;part=0;
-       while (SSL_read_ex(ssl, buffer, CHUNK_SIZE, &readbytes) > 0  || 0*(kbyte<2097152)) {
+       while (SSL_read_ex(ssl, buffer, CHUNK_SIZE, &readbytes) > 0) {
             if(readbytes==CHUNK_SIZE){
             if(ct) fwrite(outmsg+CHUNK_SIZE-TAGSIZE, TAGSIZE,1, fd);
             if (dec_update(cx, outmsg, &outlen, buffer, CHUNK_SIZE)) {
             fprintf(stderr, "Failed Decrypt update\n");
 
             goto outg;
-          }               //printf("%d -- %02x \n",ct,buffer[0]); 
+          }
              fwrite(outmsg, CHUNK_SIZE-TAGSIZE,1, fd); 
              memcpy(tag, buffer+CHUNK_SIZE-TAGSIZE, TAGSIZE);
              kbyte=(++ct)*CHUNK_SIZE;curr_time = time(NULL);
              printf("\rRecieved %d bytes at rate %f bps",kbyte, (float)kbyte/(curr_time-start_time) );
              fflush(stdout);
-             //printf("ct=%d %d\n",ct++, readbytes);
          }    
            else if(readbytes>0){
            part=1;
@@ -311,12 +190,8 @@ void createserver(int port)
                        memcpy(tag+TAGSIZE,buffer ,  readbytes);               
                        tp=tag+readbytes;  
                        cx->mlen -= (TAGSIZE-readbytes);
-                      // printf("rb %d \n",readbytes);
-                      //  for(i=0;i<16;i++)printf("<%02x> ",cx->paccum[i]);  printf("\n");   
-                      // for(i=0;i<readbytes;i++)printf("{%02x} ",outmsg[CHUNK_SIZE-TAGSIZE+i]);  printf("\n");                       
                        addmul(cx->paccum,buffer+CHUNK_SIZE-TAGSIZE, readbytes,cx->H);
                        memcpy(cx->accum, cx->paccum,16);
-                      // for(i=0;i<16;i++)printf("<%02x> ",cx->accum[i]);printf("\n"); 
                        
                   }
              if(readbytes>TAGSIZE){dec_update(cx, outmsg, &outlen, buffer, readbytes-TAGSIZE);
@@ -325,9 +200,6 @@ void createserver(int port)
              memcpy(tag,buffer+readbytes-TAGSIZE, TAGSIZE);
                }
              }
-             else if(readbytes==0){
-             ;;
-             }  
  
         } 
         if(!part) {  fwrite(outmsg+CHUNK_SIZE-TAGSIZE, TAGSIZE,1, fd);
@@ -336,7 +208,6 @@ void createserver(int port)
  
                   }
            ret = dec_final (cx, tp);
-           //for(i=0;i<16;i++) printf("%02x ",tp[i]);printf("\n");
            if(ret==-1) printf("TAG MISMATCH\n");
 
         } 
@@ -370,7 +241,7 @@ void createserver(int port)
  
             goto outg;
           }   
-             fwrite(outmsg, CHUNK_SIZE-TAGSIZE,1, fd); //printf("ct=%d %d\n",ct++, readbytes);
+             fwrite(outmsg, CHUNK_SIZE-TAGSIZE,1, fd);
          }    
            else if(readbytes>0){
            part=1;
@@ -384,31 +255,16 @@ void createserver(int port)
              fwrite(outmsg,readbytes-TAGSIZE,1, fd);
                }
              }
-             else if(readbytes==0){
-             ;;
-             }  
-             printf("%d \n",fs);
         } 
         if(!part) {fwrite(outmsg+CHUNK_SIZE-TAGSIZE, TAGSIZE,1, fd);
 
    }
-       ret = EVP_DecryptFinal (ctxx, outmsg , &outlen); //ts2=rdtscp();       
+       ret = EVP_DecryptFinal (ctxx, outmsg , &outlen);
        
-     //  for(i=0;i<16;i++) printf("%02x ", outmsg[i]);printf("\n%d %d\n",ret,outlen);     
-     //  if (ret <= 0) {
- 
-                  //  printf("TAG mismatch\n");
-   // }
-        
-     
-    //    if(ret>0)             fwrite(outmsg, outlen ,1, fd); 
-        //fprintf(stdout, "Output message is: %s\n", outmsg);
     }
-        //fprintf(stdout, "number of cycles is:  %llu\n", ts2-ts1);  
         printf("\nFile saved to %s\n",filename); 
         fprintf(stdout, "\n===========================\n");        
         fclose(fd);
-        fs=0;
         
  }
  
@@ -424,9 +280,8 @@ void createserver(int port)
 
 }
 
-int main(int argc, char **argv)
+int main(void)
 {   signal(SIGPIPE, SIG_IGN);
-    signal(SIGUSR2, &fshandler);
     sig_set_handler(SIGUSR1,&signal_handler);
     printf("%s (Library: %s)\n",
                OPENSSL_VERSION_TEXT, OpenSSL_version(OPENSSL_VERSION));
