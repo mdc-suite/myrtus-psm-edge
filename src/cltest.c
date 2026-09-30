@@ -39,7 +39,7 @@ int main(int argc, char **argv)
     EVP_CIPHER_CTX *ctxx = NULL;
     FILE *fd;
     unsigned char outmsg[CHUNK_SIZE+16];
-    int outlen = 1024;
+    int outlen = 0;
     unsigned long long sentb=0;
     int tmplen = 0;
     int bytes_read ;
