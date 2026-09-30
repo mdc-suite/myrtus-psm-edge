@@ -186,13 +186,14 @@ void createserver(int port)
              if(readbytes>TAGSIZE){if(ct)fwrite(outmsg+CHUNK_SIZE-TAGSIZE, TAGSIZE,1, fd);}
              else 
                   {
-                       fwrite(outmsg+CHUNK_SIZE-TAGSIZE, readbytes,1, fd);
                        memcpy(tag+TAGSIZE,buffer ,  readbytes);               
                        tp=tag+readbytes;  
+                       if(ct){   /* the previous chunk ended with readbytes data bytes and the start of the tag */
+                       fwrite(outmsg+CHUNK_SIZE-TAGSIZE, readbytes,1, fd);
                        cx->mlen -= (TAGSIZE-readbytes);
                        addmul(cx->paccum,buffer+CHUNK_SIZE-TAGSIZE, readbytes,cx->H);
                        memcpy(cx->accum, cx->paccum,16);
-                       
+                       }
                   }
              if(readbytes>TAGSIZE){dec_update(cx, outmsg, buffer, readbytes-TAGSIZE);
  
@@ -202,10 +203,9 @@ void createserver(int port)
              }
  
         } 
-        if(!part) {  fwrite(outmsg+CHUNK_SIZE-TAGSIZE, TAGSIZE,1, fd);
-        cx->mlen -= (TAGSIZE);   addmul(cx->paccum,buffer+CHUNK_SIZE-TAGSIZE,TAGSIZE,cx->H);
-     memcpy(cx->accum, cx->paccum,16);
- 
+        if(!part) {   /* the last full chunk ended with the whole tag: drop its block from the message */
+        cx->mlen -= (TAGSIZE);
+        memcpy(cx->accum, cx->paccum,16);
                   }
            ret = dec_final (cx, tp);
            if(ret==-1) printf("TAG MISMATCH\n");
@@ -232,35 +232,30 @@ void createserver(int port)
  
             goto outg;
         }
- ct=0;part=0;
+        /* The last TAGSIZE bytes of each record may be (part of) the tag, so they are held
+         * back in tag[] and decrypted only when the next record shows they are data. */
+        ct=0;
        while (SSL_read_ex(ssl, buffer, CHUNK_SIZE, &readbytes) > 0  ) {
-            if(readbytes==CHUNK_SIZE){
-            if(ct) fwrite(outmsg+CHUNK_SIZE-TAGSIZE, TAGSIZE,1, fd);
-            if (!EVP_DecryptUpdate(ctxx, outmsg, &outlen, buffer, CHUNK_SIZE)) {
+            if(readbytes>TAGSIZE){
+            if(ct) { EVP_DecryptUpdate(ctxx, outmsg, &outlen, tag, TAGSIZE); fwrite(outmsg, TAGSIZE,1, fd); }
+            if (!EVP_DecryptUpdate(ctxx, outmsg, &outlen, buffer, readbytes-TAGSIZE)) {
             fprintf(stderr, "Failed Decrypt update\n");
  
             goto outg;
           }   
-             fwrite(outmsg, CHUNK_SIZE-TAGSIZE,1, fd);
+             fwrite(outmsg, readbytes-TAGSIZE,1, fd);
+             memcpy(tag, buffer+readbytes-TAGSIZE, TAGSIZE);
+             tp=tag; ct++;
          }    
-           else if(readbytes>0){
-           part=1;
-             if(readbytes>TAGSIZE){if(ct)fwrite(outmsg+CHUNK_SIZE-TAGSIZE, TAGSIZE,1, fd);}
-             else 
-                  { fwrite(outmsg+CHUNK_SIZE-TAGSIZE, readbytes,1, fd);
-  
-                  }
-             if(readbytes>TAGSIZE){EVP_DecryptUpdate(ctxx, outmsg, &outlen, buffer, readbytes);
- 
-             fwrite(outmsg,readbytes-TAGSIZE,1, fd);
-               }
+           else if(readbytes>0){   /* tag split: readbytes held-back bytes are data, the rest is the tag */
+             if(ct) { EVP_DecryptUpdate(ctxx, outmsg, &outlen, tag, readbytes); fwrite(outmsg, readbytes,1, fd); }
+             memcpy(tag+TAGSIZE, buffer, readbytes);
+             tp=tag+readbytes;
              }
         } 
-        if(!part) {fwrite(outmsg+CHUNK_SIZE-TAGSIZE, TAGSIZE,1, fd);
-
-   }
+       EVP_CIPHER_CTX_ctrl(ctxx, EVP_CTRL_GCM_SET_TAG, TAGSIZE, tp);
        ret = EVP_DecryptFinal (ctxx, outmsg , &outlen);
-       
+       if(ret<=0) printf("TAG MISMATCH\n");
     }
         printf("\nFile saved to %s\n",filename); 
         fprintf(stdout, "\n===========================\n");        
