@@ -258,7 +258,7 @@ endif
 
 `uname -m` gives the architecture of the machine that compiles, which is the right question here: registration compiles each backend inside the container, on the machine that will run it. `gen.c` copies the Makefile unchanged, so no other stage had to change. The x86 helper functions were made `static`: with both implementations in one file, their names would otherwise reach `lib_enc.so` twice, the same kind of clash as in M10.
 
-**Validated:** both implementations produce the FIPS-197 vectors (`69c4e0d86a7b0430d8cdb78070b4c55a` for AES-128, `8ea2b7ca516745bfeafc49904b496089` for AES-256). Eight backends register on both architectures, and on the board f7 and f8 keep the figures of the M12 characterisation.
+**Validated:** both implementations produce the FIPS-197 vectors (`69c4e0d86a7b0430d8cdb78070b4c55a` for AES-128, `8ea2b7ca516745bfeafc49904b496089` for AES-256). Eight backends register on both architectures, and on the board f7 and f8 measure the same time and energy as before the change.
 
 ### 4.4 Energy measurement
 
@@ -266,65 +266,22 @@ endif
 `arm` · `src/ina260.h` (new), `src/profile01.c`, `src/internalprofile.c`, `src/gen.c` · `7debc15`
 
 > [!IMPORTANT]
-> The component chooses a backend from its measured time *and* energy. On x86 the energy comes from RAPL, which the Cortex-A53 does not have; without it the selection was stuck on one backend and crypto-agility did nothing. The board's INA260 power monitor now provides the energy, with a protocol built around what the sensor can and cannot resolve.
+> The component chooses a backend from its measured time *and* energy. On x86 the energy comes from RAPL, which the Cortex-A53 does not have; without it the selection was stuck on one backend and crypto-agility did nothing. The board's INA260 power monitor now provides the energy, with a protocol built around what the sensor can resolve.
 
-**The sensor.** The K26 module carries an INA260 power monitor, which the kernel exposes through hwmon as `ina260_u14`:
+**The sensor.** The K26 module carries an INA260 power monitor, exposed by hwmon as `ina260_u14` (`/sys/class/hwmon/hwmonN/power1_input`, in microwatts, 10 mW per step, updated every ~2.2 ms). The `hwmonN` index changes across boots, so the code finds the device by name. The sensor measures the whole module: at rest it reads about 3.05 W, and one A53 core at full load adds only about 0.14 W. A single AES block is far below that resolution, so the backend has to run long enough, and an idle baseline has to be subtracted.
 
-```
-/sys/class/hwmon/hwmonN/name          -> ina260_u14
-/sys/class/hwmon/hwmonN/power1_input  -> microwatts   (10 mW per step)
-/sys/class/hwmon/hwmonN/curr1_input   -> milliamps
-/sys/class/hwmon/hwmonN/in1_input     -> millivolts
-```
+**Protocol, per backend** (the aarch64 branch of `profile01.c`). A sampler thread reads the sensor every 2 ms. It measures 2 s of idle, then 3 s of the backend looping on its own core (`internalprofile` reports the exact start and end of the loop), then 2 s of idle again. Net power is the run level minus the mean of the two baselines. Time and energy are scaled to 50 000 iterations, upstream's unit, so `db.yaml` keeps the x86 format and `synthesize` needed no change. The run lasts a fixed *time* rather than a fixed number of iterations because the backends span three orders of magnitude, from 0.57 s to 145 s per 50 000 iterations.
 
-The `hwmonN` index changes across boots, so the code finds the device **by name**. The value updates every ~2.2 ms (the INA260's default 1.1 ms conversion for current plus 1.1 ms for voltage), and it is the same figure `xmutil xlnx_platformstats -p` prints as *SOM total power*.
+**Robustness.**
+- *Estimator:* each window's level is the median of its 250 ms block means. A burst from another process spoils a few blocks without moving the median, and averaging within blocks keeps a resolution well below the sensor's 10 mW step.
+- *Quality gate:* a measurement is accepted only if the two baselines, and the two halves of the run, agree within 15 mW; otherwise it is repeated, up to three times. Every attempt is logged in `power.csv`, next to `db.yaml`.
 
-**What it can resolve.** It measures the whole module: processors, programmable logic and DDR. At rest the board draws about 3.05 W; one A53 core at full load adds about 0.14 W. What we want to measure is therefore about 5% of the reading, and a single AES block is far below the sensor's resolution. That dictates the protocol: nothing can be measured per operation, the workload has to run long enough, and an idle baseline has to be subtracted.
-
-**Protocol, per backend** (the aarch64 branch of `profile01.c`):
-
-1. start the sampler thread: one `power1_input` read every 2 ms, pinned to cpu1;
-2. measure 2 s of **idle baseline**;
-3. run `./internalprofile s n 3`, which loops the backend for 3 s on cpu3 and prints its own start time, end time and iteration count, so the energy is integrated over exactly the loop and not over process start-up;
-4. measure 2 s of **idle baseline** again;
-5. net power = run level − mean of the two baselines. Time and energy are scaled to 50 000 iterations, upstream's `ITER`, so `db.yaml` keeps the x86 format and `synthesize` needed no change.
-
-The workload runs for a fixed *time*, not a fixed number of iterations, because the backends span three orders of magnitude (0.57 s to 145 s per 50 000 iterations): any fixed count would be too short for the fast ones or far too long for the slow ones.
-
-**Estimator.** The power level of each window is the **median of its 250 ms block means**. A foreign process that burns power for part of a window shifts the plain mean by tens of mW; it spoils two or three blocks and leaves their median where it was. A median of the raw samples would be robust too, but it is quantised to the sensor's 10 mW step, which is most of the gap between two backends. Averaging ~125 samples per block brings the resolution well below one milliwatt.
-
-**Quality gate.** A measurement is accepted only if the two baselines agree within 15 mW, the two halves of the run agree within 15 mW, and the net power is positive. Otherwise it is repeated, up to three times, keeping the cleanest attempt. On a quiet board the gate fires on about 2% of measurements.
-
-**Logging.** Every attempt appends a line to `power.csv`, next to `db.yaml`, with the statistics of each window and the net power under all three estimators (mean, median, robust). `db.yaml` keeps only the robust figure.
-
-**Characterisation.** 8 h unattended run, 283 measurements per backend, board otherwise idle, governor `performance`. These are the reference figures for this board:
-
-| Backend | Time per 50 000 it. [s] | Net power [mW] | Energy per 50 000 it. [J] |
-|---|---|---|---|
-| `enc_s01_n01` | 1.4917 | 131.1 | 0.198 |
-| `enc_s01_n02` | 1.3867 | 145.5 | 0.205 |
-| `enc_s01_n03` | 110.27 | 139.0 | 15.6 |
-| `enc_s01_n04` | 0.5736 | 145.7 | 0.085 |
-| `enc_s02_n01` | 2.0313 | 130.5 | 0.267 |
-| `enc_s02_n02` | 1.8161 | 144.6 | 0.267 |
-| `enc_s02_n03` | 145.14 | 139.7 | 20.5 |
-| `enc_s02_n04` | 0.7318 | 142.5 | 0.105 |
-
-- **Repeatability:** one measurement has a standard deviation of 1.3–3.4 mW on net power, i.e. 1–3% on energy. Times reproduce to four digits.
-- **The backends really differ:** the 14 mW gap between `n01` and `n02` is about 60 standard errors over 283 measurements.
-- **Not thermal:** over 8 h, across 30.1–34.5 °C with the fan at constant speed, net power and temperature are uncorrelated (|r| ≤ 0.1).
-- **Registration agrees with isolated runs:** energies measured during a full registration match isolated measurements within 2.3%.
-
-The campaign was taken with the mean-based estimator, before the robust one; later registrations confirm each backend within a few mW.
+**Validation.** Before the protocol was used for selection, an 8-hour unattended campaign (283 measurements per backend) checked that its figures can be trusted: one measurement varies by 1–3% on energy, the differences between backends are real down to about 1%, temperature plays no role, and figures taken during a normal registration match isolated ones within 2.3%. The limits this leaves are discussed in §9.
 
 > [!WARNING]
-> **The quality gate filters disturbances asymmetrically.** A test harness that polled the container with `docker exec` every 5 s biased *every* registration low by about 45 mW (−31% on energy). A burst inside the run window makes the two halves disagree, so the attempt is retried; a burst in both baselines passes the gate and inflates the baseline that gets subtracted. The accepted attempts are therefore the ones that *underestimate*. Never poll the container during a measurement: `tools/bench_ina260.sh` waits by following the container log instead. Reproduced and fixed under controlled conditions: with polling active the old code measured 96 mW against a true 140 mW, the new one 140 mW.
+> **Do not poll the container while it measures.** A harness running `docker exec` every 5 s biased every measurement about 30% low: bursts in the baselines pass the gate and inflate the subtracted idle, while bursts in the run are rejected. `tools/bench_ina260.sh` waits by following the container log instead.
 
-**Requirements.** The container reads `/sys/class/hwmon`, which it can because `compose-server.yml` runs it privileged. For reference-grade figures the board should be otherwise idle; the timers that wake up on their own (`unattended-upgrades`, `anacron`, `dpkg-db-backup`, `logrotate`) are worth stopping during a campaign.
-
-**Tools** (`tools/`). `ina260_test.c` checks the sampler on its own: sampling statistics, idle power and the power of one busy core. `bench_ina260.sh` runs unattended campaigns (round-robin measurements, idle tracking, a spin-loop reference, periodic full registrations) and writes a csv and a rolling summary.
-
-What these figures can and cannot be compared with is explained in §9.
+**Requirements and tools.** The container reads `/sys/class/hwmon` because compose runs it privileged, and a quiet board gives the best figures. `tools/ina260_test.c` checks the sensor on its own; `tools/bench_ina260.sh` runs unattended measurement campaigns.
 
 #### 🟡 M13 · Fail the x86 measurement instead of hanging
 `x86` · `src/profile01.c` · `07ac3df`
