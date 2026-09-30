@@ -163,6 +163,10 @@ void createserver(int port)
     EDcontext *cx;    
     time_t start_time,curr_time;
     srand(time(NULL));
+    /* al3monni mod: start each port on a backend of its own security level. The client
+     * encrypts with AES-256-GCM on 5544 and AES-128-GCM on 5545 (cltest.c); upstream
+     * started both processes on 98 = enc_s02_n02, so 5545 decrypted with AES-256. */
+    mode = (port == 5544) ? 0x62 : 0x52;   /* enc_s02_n02 / enc_s01_n02 */
     ctx = SSL_CTX_new(TLS_server_method());
     if (!ctx) {
         perror("Unable to create SSL context");
