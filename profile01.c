@@ -242,12 +242,30 @@ int main(int argc, char **argv)
     {
         FILE *command;
 
+        /* Check first that likwid can start the counters. In wrapper mode likwid-perfctr
+         * forks the program, stops it, and resumes it once the counters run; when starting
+         * them fails (no MSR access: Secure Boot lockdown, no msr module, a VM) it exits
+         * without killing it (likwid 5.5.1, likwid-perfctr.lua, startCounters error path).
+         * The stopped child keeps the pipe below open and fgets never returns. -S forks
+         * nothing, so it fails cleanly. */
+        sprintf(exec, "likwid-perfctr -f -g ENERGY -C %d -S 100ms > /dev/null 2>&1", cpu);
+        if (system(exec) != 0) {
+            fprintf(stderr, "profile: likwid cannot start the ENERGY counters on cpu %d, "
+                            "%s not measured\n", cpu, name);
+            return 6;
+        }
+
         sprintf(exec, "likwid-perfctr -f -g ENERGY ./internalprofile %d %d",
                 atoi(argv[1]), atoi(argv[2]));
         if ((command = popen(exec, "r")) != NULL) {
             while (fgets(buffer, sizeof buffer, command) != NULL)
                 extract(buffer, &energy, &runtime);
             pclose(command);
+        }
+        if (runtime <= 0 || energy <= 0) {     /* nothing parsed: do not register zeros */
+            fprintf(stderr, "profile: no time or energy in likwid's output, "
+                            "%s not measured\n", name);
+            return 7;
         }
     }
 #endif
