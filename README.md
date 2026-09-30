@@ -199,18 +199,6 @@ Two things to check in that output: `Creating Shared Library` is not followed by
 
 The `Registering Implementation` lines are printed whatever happens, because `start.sh` discards the output of each registration. Whether all eight backends registered is checked in the tests below, not read from the log.
 
-### Running in the background
-
-`up` stays attached to the terminal, which is handy for a first check; `Ctrl-C` stops the container. Once the start looks right, run it **detached** with `-d`:
-
-```bash
-docker compose -f compose-server.yml up -d --build   # starts in the background and returns the prompt
-docker logs -f Test-server                           # follow the log; Ctrl-C stops following, not the container
-docker compose -f compose-server.yml down            # stop and remove the container
-```
-
-The compose file sets `restart: unless-stopped`, so a detached container comes back by itself after a reboot, until it is stopped with `down`.
-
 ---
 
 ## Tests
