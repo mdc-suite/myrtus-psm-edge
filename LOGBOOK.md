@@ -13,7 +13,7 @@ This logbook records the modifications that took **spdocker** from an x86-only p
 
 ### How to read the modifications
 
-Every modification in §3 and §4 carries a number (`M1` … `M16`), a level and the architecture it concerns.
+Every modification in §3 and §4 carries a number (`M1` … `M18`), a level and the architecture it concerns.
 
 | Level | Meaning | How it looks |
 |---|---|---|
@@ -28,7 +28,7 @@ Architecture tags: `arm` (aarch64 only), `x86` (x86-64 only), `both`.
 1. [What this project is](#1-what-this-project-is)
 2. [What was broken](#2-what-was-broken)
 3. [Baseline: making upstream run at all](#3-baseline-making-upstream-run-at-all) — M1 … M3
-4. [Port modifications](#4-port-modifications) — M4 … M16
+4. [Port modifications](#4-port-modifications) — M4 … M18
 5. [Host prerequisites](#5-host-prerequisites)
 6. [Build and run](#6-build-and-run)
 7. [Verification](#7-verification)
@@ -326,7 +326,7 @@ A clean-up of leftovers (`fec03c9`) also removed two things the runtime needs:
 ### 4.6 Repository
 
 #### 🟡 M16 · Clean the repository and give it a structure
-`both` · repository layout, `Dockerfile`, `.dockerignore` · `655b706`, `f9b0579`, `dbd62c2`
+`both` · repository layout, `src/`, `Dockerfile`, `.dockerignore` · `655b706`, `f9b0579`, `dbd62c2`, `2a464e4` … `f374710`
 
 Once both architectures were validated, the repository was reduced to what the component needs.
 
@@ -334,6 +334,7 @@ Once both architectures were validated, the repository was reduced to what the c
 - **Earlier clean-ups** (`dc78a00`, `bb4ce8c`, `fec03c9`, `baf99d5`) had already stopped tracking the files that registration regenerates at every start and removed upstream's older profiler.
 - **Build artefacts** (`655b706`): 14 object files, 2 static libraries and 12 x86 test binaries committed inside the backend directories, an empty stray file, and `header.h`, which `reset` rewrites at every start (now in `.gitignore`).
 - **Unused sources** (`f9b0579`), none referenced by a Makefile, the Dockerfile or an `#include`: old transfer utilities, two headers nobody includes, upstream's policy file `config.txt` (nothing reads it: the policy is the arguments of `synthesize`), stray files in f1/f4, the assembly listings and original sources in f2/f5, and the benchmark, tests and debug helpers of the bitsliced library in f3/f6.
+- **Dead code in the sources** (`2a464e4`, `b1bd298`, `286472e`, `e297cdd`, `4b0a988`, `f374710`): unused functions, variables, macros and includes, commented-out code, the server's debug signal and the unused `cycles.h`, without changing what the component does. The client no longer links `encrypt02.c`, and the Makefiles keep only the flags they use. Each step was checked with the round trip and the runtime switch on both levels; the compiled code of `gen`, `register` and `synthesize` is unchanged, and `send` and `reset` now exit with 0.
 - **Layout** (`dbd62c2`):
 
 ```
@@ -345,6 +346,29 @@ test/       rfile
 ```
 
 The container keeps the flat `/app` the pipeline expects: the Dockerfile copies each directory into `/app` instead of `COPY . .`, so `start.sh`, `register`, `gen` and the backends' `config.txt` are unchanged. `send1.c` became `send.c`. The contents of `/app` were compared file by file with the previous image before the change. **Validated** on both architectures: eight backends registered and measured, both levels byte-identical.
+
+### 4.7 Transfers
+
+#### 🟡 M17 · Decrypt files of every size
+`both` · `src/server_f.c`, `src/cltest.c` · `7440efc`, `ee3af93`
+
+The client sends the ciphertext in 1024-byte records, followed by the 16-byte tag. The server cannot tell which record is the last, so it writes the first 1008 bytes of each full record at once and holds back the last 16, which may be the tag, until the next record arrives. Two sizes slipped through, both inherited from upstream and never seen because `rfile` is neither:
+- **File size + 16 a multiple of 1024** (1008, 2032, … bytes). The tag fills the end of the last full record, and the closing branch wrote its decryption to the file and left its block in the GHASH: 16 extra bytes and `TAG MISMATCH`. The server now drops that block from the message instead.
+- **Empty file.** The client started `outlen` at 1024 and sent 1024 uninitialised bytes before the tag, and the server trimmed a previous record that did not exist. The client now starts at 0, and the server trims only after a record.
+
+**Validated** on x86-64 with 18 sizes from 0 bytes to 1 MiB, every boundary around 1024 and 2048 included, on both levels: 36 of 36 transfers byte-identical and without `TAG MISMATCH`, against 30 before. A client that alters one byte of the data or of the tag is flagged in all 36.
+
+#### 🟡 M18 · Make the OpenSSL path (mode 0) work
+`both` · `src/server_f.c` · `7440efc`
+
+`./send <port> 0` switches a port from the registered backends to OpenSSL's AES-GCM. Only a manual `send` reaches it: `synthesize` never produces 0, and both ports start on a backend (M14). On that path `rfile` arrived as 9856 bytes, with 16 bytes missing from the end of every 1024-byte record, and the tag was never checked. Three defects, all from upstream:
+- the record counter was never incremented, so the 16 bytes held back from each record were never written;
+- the last record was decrypted together with its tag;
+- the expected tag was never passed to OpenSSL (`EVP_CTRL_GCM_SET_TAG`), and the result of `EVP_DecryptFinal`, a failure every time, was ignored.
+
+`encrypt02.c` can take a block back out of its GHASH (M17); OpenSSL cannot. This path therefore holds the last 16 bytes back still encrypted, and decrypts them only once the next record shows they are data. It passes the tag before `EVP_DecryptFinal` and reports `TAG MISMATCH` like the backend path.
+
+**Validated** on x86-64 with the sizes of M17: 36 of 36 transfers byte-identical, against 18 before; a tampered transfer is flagged in 36 of 36, against none before.
 
 ---
 
@@ -522,10 +546,9 @@ The x86-64 column was validated on an AMD Ryzen 5 3500U (Zen+) with the prerequi
 
 ## 8. Selection mechanism and implementation map
 
-One byte, the **mode**, encodes the choice (`encrypt02.c`):
+One byte, the **mode**, encodes the choice: two bits of function class, two of security level, four of implementation index. `synthesize` sets the class (`01`, encryption); the server reads only the level and the index (`encrypt02.c`):
 
 ```c
-#define fbits(y)  (((y) & 0xc0) >> 6)   // function class
 #define sbits(y)  (((y) & 0x30) >> 4)   // security level
 #define ibits(y)   ((y) & 0x0f)         // implementation index
 // fetch(mode): slevel = sbits(mode); num = ibits(mode);
@@ -540,7 +563,7 @@ For example 98 = `0x62` = `01 10 0010` → encryption, level 2, index 2 → **`e
 Two choices are made in two different places, and keeping them apart explains most of what the component does.
 
 - **The security level is the algorithm**, fixed per port and chosen by the client with `-s`: `1` connects to 5544 and encrypts with AES-256-GCM, `0` connects to 5545 and encrypts with AES-128-GCM (`cltest.c`). The client always uses OpenSSL and knows nothing about the mode.
-- **The mode picks the implementation**, on the server only. Every backend computes one AES block (a key and 16 bytes in, 16 bytes out); the GCM mode around it (counter, GHASH, tag) is written once in `encrypt02.c` and calls the backend block by block. With `mode == 0` the server uses OpenSSL's GCM instead.
+- **The mode picks the implementation**, on the server only. Every backend computes one AES block (a key and 16 bytes in, 16 bytes out); the GCM mode around it (counter, GHASH, tag) is written once in `encrypt02.c` and calls the backend block by block. With `mode == 0` the server uses OpenSSL's GCM instead (M18).
 
 Because all the backends of a level compute the same function, any of them works with the client: changing implementation is invisible on the wire, changing level is not. That is what makes the switch safe at runtime: `dec_update` looks up the backend from the mode for every 1024-byte chunk, so a new mode applies even in the middle of a transfer. Key and IV come from the TLS session on both sides (`SSL_export_keying_material`, 64 bytes: key 0–31, IV 32–47); nothing about the cipher is negotiated beyond the TLS handshake itself.
 
@@ -613,6 +636,7 @@ These follow from the choice and from the hardware; they are properties of the m
 - **The low security level is no longer corrupted** (M14).
 - **The x86 measurement no longer hangs** when likwid cannot start its counters, and no longer registers zeros when it cannot measure (M13).
 - **The round-trip test and the received-files directory are back** (M15).
+- **Files of every size arrive intact**, and the OpenSSL path (mode 0) works and checks the tag (M17, M18).
 
 ### Open points
 
@@ -623,7 +647,7 @@ All secondary: none affects normal operation.
    - `start.sh`: keep the standard error of `register` instead of discarding it, so a refused registration, M13's messages included, reaches the container log.
    - `cltest.c`: reject any `-s` other than `0` and `1` (§7).
 2. **`send` accepts a mode of the wrong level.** The signal handler writes any value into `mode`: `./send 5545 98` moves the low-level port to an AES-256 backend and reproduces exactly the failure M14 removed. `synthesize` never does this (§8). The handler could refuse a mode whose level does not match its port; that needs the port's level in a global, since `port` is local to `createserver`.
-3. **Decrypted data is written before the tag is checked.** The server decrypts chunk by chunk and writes each one as it goes; the authentication tag is verified only at the end, in `dec_final`. On a mismatch it prints `TAG MISMATCH`, keeps the file, and does not tell the client. With the right level (M14) the tag verifies and the file is correct, but an authenticated cipher should never release data it has not authenticated. Writing to a temporary name and renaming only after a successful `dec_final`, or deleting the file on a mismatch, would close it.
+3. **Decrypted data is written before the tag is checked.** The server decrypts chunk by chunk and writes each one as it goes; the authentication tag is verified only at the end, in `dec_final` (by OpenSSL in mode 0). On a mismatch it prints `TAG MISMATCH`, keeps the file, and does not tell the client. With the right level (M14) the tag verifies and the file is correct, but an authenticated cipher should never release data it has not authenticated. Writing to a temporary name and renaming only after a successful `dec_final`, or deleting the file on a mismatch, would close it.
 4. **Test certificate.** `certs/certfile.crt` is self-signed and valid until 18 January 2027. The client does not verify it, so its expiry will not break transfers, but the client does not authenticate the server either. The fix is a certificate the client actually checks; renewing this one only moves the date.
 
 ---
@@ -650,7 +674,9 @@ Each modification with the commits that implement it. `git log --oneline main` g
 | 🟡 M13 · x86 measurement fails instead of hanging | `07ac3df` |
 | 🔴 M14 · Each port on its own level | `eb16eb4` |
 | 🟢 M15 · `rfile` and `Downloads/` | `f44d204`, `a7fc710` |
-| 🟡 M16 · Repository cleanup and layout | `dc78a00`, `bb4ce8c`, `fec03c9`, `baf99d5`, `655b706`, `f9b0579`, `dbd62c2` |
+| 🟡 M16 · Repository cleanup and layout | `dc78a00`, `bb4ce8c`, `fec03c9`, `baf99d5`, `655b706`, `f9b0579`, `dbd62c2`, `2a464e4`, `b1bd298`, `286472e`, `e297cdd`, `4b0a988`, `f374710` |
+| 🟡 M17 · Files of every size | `7440efc`, `ee3af93` |
+| 🟡 M18 · OpenSSL path (mode 0) | `7440efc` |
 | Base image snapshot (§12) | `66baa82` |
 
 ---
