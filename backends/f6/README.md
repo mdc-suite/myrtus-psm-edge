@@ -1,4 +1,4 @@
-> **Source.** Vendored from [conorpp/bitsliced-aes](https://github.com/conorpp/bitsliced-aes) by Conor Patrick, adapted to AES-256 for backend f6. The upstream repository declares no licence. Only the files the backend builds are kept here; the library's benchmark, tests and debug helpers were removed (LOGBOOK M-A20), so the build instructions below refer to the original repository.
+> **Source.** Vendored from [conorpp/bitsliced-aes](https://github.com/conorpp/bitsliced-aes) by Conor Patrick, adapted to AES-256 for backend f6. The upstream repository declares no licence. Only the files the backend builds are kept here; the library's benchmark, tests and debug helpers were removed (LOGBOOK M16), so the build instructions below refer to the original repository.
 
 Bitsliced AES
 -------------

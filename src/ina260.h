@@ -1,7 +1,7 @@
 /* ina260.h -- SOM power sampler for the Kria K26 on-module INA260.
  *
  * al3monni mod: energy measurement on aarch64. likwid's ENERGY group is
- * built on x86 RAPL and cannot be read on the Cortex-A53 (LOGBOOK M-A7, §9).
+ * built on x86 RAPL and cannot be read on the Cortex-A53 (LOGBOOK M12, §9).
  * The only power source on the SOM is the INA260, exposed by hwmon as
  * power1_input in microwatts. It is a board-level figure (PS + PL + DDR),
  * so callers must subtract an idle baseline to isolate a workload.

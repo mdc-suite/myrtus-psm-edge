@@ -1,7 +1,7 @@
 /* f7/aes128.c -- AES-128, single block, using the AES instructions of the host.
  *
  *   x86-64  : AES-NI (upstream implementation, unchanged)
- *   aarch64 : ARMv8 Crypto Extensions (LOGBOOK M-A8)
+ *   aarch64 : ARMv8 Crypto Extensions (LOGBOOK M10)
  *
  * al3monni mod: the ARM implementation, and the split below. The port used to
  * replace the AES-NI path, which cost the x86-64 build these two backends: a

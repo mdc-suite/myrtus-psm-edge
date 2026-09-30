@@ -225,7 +225,7 @@ int main(int argc, char **argv)
 
         // al3monni mod start: replace the manifest only when profiling succeeded.
         // Upstream ran rm/mv unconditionally, so a failed profile replaced header.h
-        // with an empty header1.h and wiped the registration state (LOGBOOK M-A7).
+        // with an empty header1.h and wiped the registration state (LOGBOOK M8).
         // On failure the backend is not registered: manifest untouched, object removed.
         system("rm header.h");
         system("mv header1.h header.h");

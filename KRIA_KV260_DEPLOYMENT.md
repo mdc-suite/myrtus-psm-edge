@@ -141,7 +141,7 @@ ssh ubuntu@192.168.137.50
 
 ## 6. Install Docker
 
-> If you intend to regenerate the project's base image from this board, take the rootfs snapshot **now, before installing Docker**. See [`LOGBOOK.md`](LOGBOOK.md) §11 — a board with Docker already running carries an image store that would otherwise end up inside the snapshot.
+> If you intend to regenerate the project's base image from this board, take the rootfs snapshot **now, before installing Docker**. See [`LOGBOOK.md`](LOGBOOK.md) §12 — a board with Docker already running carries an image store that would otherwise end up inside the snapshot.
 
 ```bash
 curl -fsSL https://get.docker.com | sudo sh
@@ -197,7 +197,7 @@ Expect the first build to take around ten minutes and to pull a couple of GB for
 
 ## Checking the power sensor
 
-The energy measurement on ARM reads the SOM's INA260 (LOGBOOK M-A14). Two commands confirm it is exposed on the image you flashed:
+The energy measurement on ARM reads the SOM's INA260 (LOGBOOK M12). Two commands confirm it is exposed on the image you flashed:
 
 ```bash
 for h in /sys/class/hwmon/hwmon*; do echo "$h: $(cat $h/name)"; done   # expect ina260_u14

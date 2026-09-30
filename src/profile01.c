@@ -9,7 +9,7 @@
  *             output ("Runtime unhalted [s]", "Energy Core [J]").
  *   aarch64 : likwid's ENERGY group is defined on x86 RAPL counters and cannot be
  *             read on the Cortex-A53, so the energy comes from the SOM's INA260
- *             power monitor instead. See ina260.h and LOGBOOK.md M-A14.
+ *             power monitor instead. See ina260.h and LOGBOOK.md M12.
  *
  * al3monni mod: the aarch64 path, plus the removal of the dead upstream code that
  * used to sit here -- an inline profiling loop superseded by internalprofile.c, and
