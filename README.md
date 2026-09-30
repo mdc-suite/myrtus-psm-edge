@@ -4,12 +4,13 @@ Crypto-agile TLS prototype with eight runtime-selectable AES backends, running o
 
 **Repo:** https://github.com/mdc-suite/myrtus-psm-edge
 **Upstream:** https://github.com/subhadeep-banik/spdocker
-**Port branch:** `al3monni-test-arm` · **x86 baseline:** `al3monni-test` (`ddb5f5f`)
-**Target hardware:** AMD/Xilinx Kria KR260 — Zynq UltraScale+ MPSoC, 4× Cortex-A53, aarch64
+**Port branch:** `al3monni-test-arm` · **x86 baseline:** `al3monni-test` (`ddb5f5f`), re-validated on the current tree
+**Target hardware:** AMD/Xilinx Kria KV260 — Zynq UltraScale+ MPSoC, 4× Cortex-A53, aarch64
 **Cross-build host:** Windows + WSL2 (Ubuntu) + Docker Desktop, `linux/arm64` under QEMU
 **On-board host:** Ubuntu 22.04 IoT, Docker Engine, native aarch64 build
-**Base image:** [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu) (arm64/v8)
-**Status:** ✅ **Validated on real silicon.** Builds, registers all 8 implementations, serves over TLS, and round-trips byte-identical (`cmp`) on the Kria KV260. Energy is measured on ARM through the on-SOM INA260, so backend selection runs on real measurements.
+**x86-64 host:** bare-metal Ubuntu, Docker Engine, native amd64 build
+**Base image:** [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu) (arm64/v8) on aarch64, `ubuntu:22.04` on x86-64 — chosen automatically
+**Status:** ✅ **Validated on real silicon, on both architectures.** Builds, registers all 8 implementations, serves over TLS, and round-trips byte-identical (`cmp`) on both security levels, on the Kria KV260 and on a bare-metal x86-64 host. Energy is measured on ARM through the on-SOM INA260 and on x86-64 through RAPL, so backend selection runs on real measurements on both.
 
 > Derived from [spdocker](https://github.com/subhadeep-banik/spdocker) by Subhadeep Banik. The complete record of every modification made to port the project from x86-64 to aarch64 is in [`LOGBOOK.md`](LOGBOOK.md).
 
@@ -36,9 +37,14 @@ reset  →  register ×8  →  gcc -shared ./LIB/*.o -o ./LIB/lib_enc.so  →  .
 - the eight objects are linked into a single **`lib_enc.so`**
 - **`server`** opens that library and resolves the backend it needs by symbol name
 
-Which backend gets used is decided by a single **mode byte**: two bits select the security level, four select the implementation index. The server maps that to a symbol name (`enc_s02_n02` and so on) and calls `dlsym`.
+Two choices are made in two different places:
 
-The order in which the eight backends are registered *is* the numbering. Client and server must agree on it, or the same mode byte will select different ciphers on each side.
+- **The security level is the algorithm**, fixed per port and chosen by the client: `./client -s 1` connects to port 5544 and encrypts with AES-256-GCM, `-s 0` connects to 5545 and encrypts with AES-128-GCM. The client always uses OpenSSL.
+- **The implementation is chosen by the server** with a single **mode byte**: two bits select the security level, four the implementation index. The server maps it to a symbol name (`enc_s02_n02` and so on), calls `dlsym`, and runs its own GCM around that AES backend. Port 5544 starts on `enc_s02_n02`, port 5545 on `enc_s01_n02`.
+
+Every backend of a level computes the same AES, so switching implementation is invisible to the client and can happen while the server runs: `./synthesize` picks the backend that best matches a time/energy policy from the measurements in `db.yaml`, and `./send <port> <mode>` delivers the new mode byte to the server process on that port.
+
+The order in which the eight backends are registered *is* the numbering: it decides which directory a given mode byte selects. The client does not depend on it, since it never loads `lib_enc.so`.
 
 ### What lives where
 
@@ -65,6 +71,15 @@ An AMD/Xilinx Kria KV260 running Ubuntu 22.04 IoT, with Docker Engine installed.
 
 Check that your user is in the `docker` group (`docker version` should respond without `sudo`), and that the microSD has several GB free — the base image alone is around 2 GB compressed.
 
+### On an x86-64 host (bare metal)
+
+Needed only to measure energy on x86-64: WSL2, Docker Desktop and virtual machines hide the RAPL registers likwid reads. On bare-metal Linux with Docker Engine:
+
+- **Secure Boot disabled.** With Secure Boot on, the kernel refuses raw MSR access and likwid cannot start its counters; `cat /sys/kernel/security/lockdown` must read `[none]`. On a machine that dual-boots Windows with BitLocker, have the recovery key ready before changing the setting.
+- **The `msr` module loaded**, after every boot: `sudo modprobe msr` (or add `msr` to `/etc/modules-load.d/`).
+
+`LOGBOOK.md` §5c has the checks, including how to confirm from inside the container that likwid reads the `ENERGY` group.
+
 ### On an x86 dev host (cross-build)
 
 Windows + WSL2 + Docker Desktop, with WSL integration enabled for the Ubuntu distro. Because the base image is an arm64 rootfs, you also need the QEMU binfmt handler registered once per WSL VM:
@@ -77,13 +92,7 @@ This does not survive `wsl --shutdown` — re-run it if you get `exec format err
 
 The cross-build is useful for catching compile errors without occupying the board, but everything runs emulated and a clean build is slower than on the board itself.
 
-To build for x86-64 *natively* instead, override the base image — the Kria one is arm64-only, and on x86-64 every `RUN` would fail with `exec format error`:
-
-```bash
-docker compose -f compose-server.yml build --build-arg BASE=ubuntu:22.04
-```
-
-All eight backends build there too: `f7` and `f8` carry both AES implementations and pick one at compile time, AES-NI on x86-64 and the ARMv8 Crypto Extensions on the Kria. Energy, however, is not measurable under WSL2 or Docker Desktop — likwid needs RAPL registers that a virtualised kernel does not expose.
+Every host builds for its own architecture by default, and all eight backends build on both: `f7` and `f8` carry both AES implementations and pick one at compile time, AES-NI on x86-64 and the ARMv8 Crypto Extensions on the Kria.
 
 ---
 
@@ -103,12 +112,22 @@ A clean first build takes roughly ten minutes on the KV260 — most of it is com
 
 To run it detached instead, use `-d` and read the logs with `docker compose -f compose-server.yml logs`.
 
-### On the x86 dev host
+### On an x86-64 host
+
+The same command as on the board, with no build argument: the Dockerfile picks `ubuntu:22.04` as the base on x86-64.
+
+```bash
+sudo modprobe msr
+docker compose -f compose-server.yml up --build
+```
+
+### Cross-build on the x86 dev host
+
+Compose builds for the host by default, so the cross-build has to ask for arm64:
 
 ```bash
 docker run --privileged --rm tonistiigi/binfmt --install arm64   # once per WSL VM
-docker buildx build --platform linux/arm64 -t myrtus-psm-edge:arm64 --load .
-sudo docker compose -f compose-server.yml up --build
+DOCKER_DEFAULT_PLATFORM=linux/arm64 docker compose -f compose-server.yml up --build
 ```
 
 ### What a successful start looks like
@@ -125,7 +144,9 @@ OpenSSL 3.0.2 15 Mar 2022 (Library: OpenSSL 3.0.2 15 Mar 2022)
 platform: debian-arm64
 ```
 
-Three things to check in that output: all eight backends register, `Creating Shared Library` is not followed by an `ld` error, and the platform reads `debian-arm64` rather than `amd64`.
+Two things to check in that output: `Creating Shared Library` is not followed by an `ld` error, and the platform matches what you meant to build — `debian-arm64` on the board and on the cross-build, `debian-amd64` on an x86-64 host.
+
+The `Registering Implementation` lines are printed whatever happens, because `start.sh` discards the output of each registration. Whether all eight backends registered is checked in the next section, not read from the log.
 
 ---
 
@@ -133,13 +154,13 @@ Three things to check in that output: all eight backends register, `Creating Sha
 
 The container is named `Test-server`. Note that `docker exec` takes the *container* name, while `docker compose` subcommands take the *service* name (`ssl-server`) — they are different.
 
-### 1. The binaries are aarch64
+### 1. The binaries match the host
 
 ```bash
 docker exec Test-server readelf -h /app/server | grep Machine
 ```
 
-Expected: `Machine: AArch64`
+Expected: `Machine: AArch64` on the board, `Advanced Micro Devices X86-64` on an x86-64 host.
 
 ### 2. All eight backends are installed
 
@@ -167,7 +188,15 @@ docker exec Test-server sh -c 'grep "///" /app/header.h'
 
 Expected: `///1-04` and `///2-04` — four implementations registered at each security level.
 
-### 5. The server is listening
+### 5. Every backend was measured
+
+```bash
+docker exec Test-server sh -c 'grep -c "^name" /app/db.yaml; grep -c "energy: 0.000000" /app/db.yaml'
+```
+
+Expected: `8` and `0` — eight entries, none with a zero energy. A backend that could not be measured is not registered at all, so a count below eight here matches a short list in step 2.
+
+### 6. The server is listening
 
 ```bash
 docker exec Test-server sh -c 'lsof -i -P -n | grep LISTEN'
@@ -175,35 +204,29 @@ docker exec Test-server sh -c 'lsof -i -P -n | grep LISTEN'
 
 Expected: TCP `*:5544` and `*:5545`.
 
-### 6. End-to-end round trip
+### 7. End-to-end round trip, on both security levels
 
-This is the test that actually proves correctness. `rfile` is a 10000-byte file committed for the purpose.
-
-```bash
-docker exec -it Test-server sh -c 'cd /app && ./client -s 1 -i 127.0.0.1:5544 -f rfile'
-```
-
-Expected: the handshake completes and the client reports `Entire File Sent 10016 bytes` — 10000 bytes of payload plus the 16-byte AEAD tag.
-
-The server writes what it received into `/app/Downloads/`, under a filename derived from the TLS session's exported keying material. **That name changes on every connection**, so list the directory to find it:
+This is the test that actually proves correctness. `rfile` is a 10000-byte file committed for the purpose. Send it once per level and compare what the server saved byte for byte:
 
 ```bash
-docker exec Test-server sh -c 'cd /app && ls -l Downloads/'
+for p in "1 5544" "0 5545"; do set -- $p
+  docker exec Test-server sh -c "cd /app && rm -f Downloads/*; ./client -s $1 -i 127.0.0.1:$2 -f rfile 2>&1 | tail -1; sleep 3; for f in Downloads/*; do cmp rfile \$f && echo IDENTICAL -s $1 port $2; done"
+done
 ```
 
-Then compare byte for byte:
+Expected, for each level: `Entire File Sent 10016 bytes` — 10000 bytes of payload plus the 16-byte AEAD tag — then `IDENTICAL`. The server log (`docker logs Test-server`) should show `Starting with enc_s02_n02` and `Starting with enc_s01_n02`, and no `TAG MISMATCH`.
 
-```bash
-docker exec Test-server sh -c 'cd /app && cmp rfile Downloads/filename-ekm<N>'
-```
+A few things to know about this test:
 
-No output means the files are identical. This is the only trustworthy check — the server's own "Received N bytes" line under-counts by design (see below), so it is not evidence of anything.
+- `-s` accepts only `1` and `0`. Any other value leaves the client without a cipher, and the server reports `TAG MISMATCH`.
+- The server saves each file as `Downloads/filename-ekm<N>` with a random `<N>`. Run transfers one at a time: the two ports draw the same sequence of names, so simultaneous transfers can end up in the same file.
+- `cmp` is the only trustworthy check. The client's `Entire File Sent` says nothing about what the server did with the data, the server's own "Received N bytes" line under-counts by design, and the server keeps a file even when its tag does not verify (see below).
 
 ---
 
 ## Known limitations
 
-**Energy on ARM is a board-level figure, not core energy.** likwid's `ENERGY` group reads Intel/AMD RAPL registers, which the Cortex-A53 does not have, so on aarch64 the energy comes from the SOM's INA260 power monitor instead: an idle baseline before and after, a three-second run of the backend, and the difference integrated over the run. The sensor sees the whole module — PS, PL and DDR — so what is measured is the *extra* power a backend draws, about 0.14 W on top of ~3.05 W at rest. It is the right quantity for comparing backends on this board and it is **not** comparable to the x86 RAPL figures, which are CPU-package energy. `LOGBOOK.md` M-A14 has the protocol and the measured characterisation.
+**Energy on ARM is a board-level figure, not core energy.** likwid's `ENERGY` group reads Intel/AMD RAPL registers, which the Cortex-A53 does not have, so on aarch64 the energy comes from the SOM's INA260 power monitor instead: an idle baseline before and after, a three-second run of the backend, and the difference integrated over the run. The sensor sees the whole module — PS, PL and DDR — so what is measured is the *extra* power a backend draws, about 0.14 W on top of ~3.05 W at rest. It is the right quantity for comparing backends on this board and it is **not** comparable to the x86 RAPL figures, which are per-core energy. `LOGBOOK.md` M-A14 has the protocol and the measured characterisation.
 
 **Energy differences below ~1% are not resolved.** A single measurement carries 1.3–3.4 mW of noise on that 0.14 W signal, roughly 1–3% on energy. Backends further apart than that rank consistently; `enc_s02_n01` and `enc_s02_n02`, which sit 0.1% apart, alternate between runs, and that is the honest result rather than a defect.
 
@@ -211,13 +234,15 @@ No output means the files are identical. This is the only trustworthy check — 
 
 **Two cosmetic reporting bugs**, both inherited from upstream and present on x86 too: the server's received-byte counter tallies whole 1024-byte chunks and drops the remainder, and the transfer rate divides by an elapsed time that rounds to zero. Neither affects the data — `cmp` is the check that matters.
 
-**The x86-64 baseline is only partly re-validated.** Build and registration pass against the current tree — eight backends, all KATs — but the energy figures do not: likwid needs RAPL registers that WSL2 and Docker Desktop do not expose, so real x86-64 numbers need a bare-metal Linux host. The end-to-end round trip has not been re-run there since `ddb5f5f` either.
+**Energy on x86-64 is per-core and needs bare metal.** likwid reads RAPL's per-core domain, which exists only when the kernel exposes the MSRs: not under WSL2, Docker Desktop or a virtual machine, and not with Secure Boot on. The figures rank the backends the same way as the board does, but they are single measurements, not a characterisation like the board's, and joules cannot be compared across the two platforms.
+
+**Two weaknesses inherited from upstream, left open.** Neither affects normal operation. `./send` accepts a mode byte of the wrong security level, and `./send 5545 98` puts the low-level port on an AES-256 backend, which breaks every transfer on it; `./synthesize` never does this. And the server writes decrypted data as it arrives and checks the authentication tag only at the end: on a mismatch it keeps the file and does not tell the client, which an AEAD should never do. `LOGBOOK.md` §9 describes both and how they could be closed.
 
 ---
 
 ## Base image
 
-The container builds on [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu), a snapshot of a Kria board's own root filesystem published to Docker Hub (`linux/arm64/v8`, ~2 GB compressed).
+On aarch64 the container builds on [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu), a snapshot of a Kria board's own root filesystem published to Docker Hub (`linux/arm64/v8`, ~2 GB compressed). On x86-64 it builds on stock `ubuntu:22.04`, the same release. The Dockerfile picks the base from the build architecture; there is no argument to pass.
 
 Stock `ubuntu:22.04` is the same distribution but not the same userspace: AMD's Kria image carries board-specific tooling — `xmutil` and the platform-statistics utilities — that the power-measurement work uses. Building on a frozen snapshot also means the toolchain does not depend on what happens to be installed on the board at build time.
 
