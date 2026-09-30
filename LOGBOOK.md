@@ -6,7 +6,7 @@ This document records **every** modification required to take the project from t
 **Upstream:** https://github.com/subhadeep-banik/spdocker
 **Branch:** `main` (the port branch, called `al3monni-test-arm` until M-A20) · **x86 baseline:** `ddb5f5f` (formerly branch `al3monni-test`), re-validated on the current tree at `07ac3df` (§7)
 **Target hardware:** AMD/Xilinx Kria KV260 — Zynq UltraScale+ MPSoC, 4× Cortex-A53, aarch64
-**Cross-build host:** Windows + WSL2 (Ubuntu) + Docker Desktop, `linux/arm64` under QEMU
+**Cross-build host:** Windows + WSL2 (Ubuntu) + Docker Desktop, `linux/arm64` under QEMU — used during the port, retired in M-A21
 **On-board host:** Ubuntu 22.04 IoT, Docker Engine, native aarch64 build
 **x86-64 host:** bare-metal Ubuntu (dual boot) on an AMD Ryzen 5 3500U (Zen+), Docker Engine, native amd64 build
 **Base image:** [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu) (arm64/v8) on aarch64, `ubuntu:22.04` on x86-64 — chosen from the build architecture, see §11
@@ -351,7 +351,7 @@ and `platform: linux/arm64` is removed from `compose-server.yml`. Every host now
 
 `ubuntu:22.04` is the same release as the board image, so both architectures compile against the same toolchain and the same OpenSSL (3.0.2, confirmed by the banner on both).
 
-**Validated:** on the x86-64 host the build log shows only `base-amd64` and the banner reads `platform: debian-amd64`; on the board, `platform: debian-arm64` with the build cache intact. The cross-build path on WSL2 has not been re-run since this change (§9).
+**Validated:** on the x86-64 host the build log shows only `base-amd64` and the banner reads `platform: debian-amd64`; on the board, `platform: debian-arm64` with the build cache intact. The cross-build path on WSL2 was not re-run after this change, and was retired in M-A21.
 
 ### M-A17 — restore the round-trip input and the received-files directory [both] · `rfile`, `start.sh` · `f44d204`, `a7fc710`
 `fec03c9` removed files that were never part of the project, and with them two that the runtime path needs:
@@ -423,13 +423,24 @@ The image keeps the flat `/app` the pipeline expects. The Dockerfile copies each
 
 **Validated:** on the x86-64 host and on the board, eight backends registered, eight entries in `db.yaml`, both security levels byte-identical.
 
+### M-A21 — retire the cross-build [both] · documentation only
+**Why.** Registration measures every backend, and since M-A7 a backend whose measurement fails is not registered. On a WSL2 host neither architecture can measure:
+- **aarch64 under QEMU**: `profile01.c` measures through the INA260 (M-A14), which does not exist in emulation. `ina260_open` fails, `profile` exits with `INA260 not available`, and no backend registers.
+- **x86-64 under WSL2**: likwid finds no RAPL registers, and since M-A19 `profile` refuses to register a backend it cannot measure.
+
+So the WSL2 host could only check that the code compiles. The board does that natively in about ten minutes, and the bare-metal x86-64 host covers the other architecture. The cross-build was retired instead of being re-validated. This follows from the code rather than from a run: the arm64 cross-build was not exercised after M-A14.
+
+**What changed.** The README no longer offers a cross-build, and says that x86-64 needs bare metal to run the component at all, not only to measure energy. §5a and §6a stay below as the record of how the port was developed. Nothing in the build prevents a cross-build: the base still follows `TARGETARCH` (M-A16), so `DOCKER_DEFAULT_PLATFORM=linux/arm64` would build an arm64 image for a compile check.
+
 ---
 
 ## 5. Host prerequisites
 
-The project has three build paths. §5a is the dev-host cross-build, used to iterate quickly; §5b is the native build on the target; §5c is the native x86-64 build, the only one that measures x86 energy. They share the same source tree and the same compose file.
+The project has two build paths: §5b, the native build on the board, and §5c, the native x86-64 build. They share the same source tree and the same compose file. §5a records the cross-build used during the port, retired in M-A21.
 
-### 5a. Cross-build host (WSL2 / Docker Desktop)
+### 5a. Cross-build host (WSL2 / Docker Desktop) — retired
+
+*Historical, kept as the record of how the port was developed. Retired in M-A21: under emulation no backend can register.*
 
 Two things the cross-build needs that a native Kria build will **not**:
 
@@ -465,7 +476,7 @@ Not needed on the board: buildx, binfmt/QEMU registration, and any `--platform` 
 
 ### 5c. Native x86-64 host (bare metal)
 
-Needed only to measure energy on x86-64. Build, registration and the round trip work on WSL2 too; the energy figures do not.
+Needed to run the component on x86-64 at all: registration measures every backend and refuses one it cannot measure (M-A19), so under WSL2 the image builds but no backend registers.
 
 1. **Bare-metal Linux.** WSL2, Docker Desktop and virtual machines run a kernel that exposes no RAPL MSRs, and likwid fails with `Cannot get access to MSRs`. A dual boot or a spare machine is enough; a live USB without persistence loses Docker and the image at every reboot.
 2. **Docker Engine** and the compose plugin (`docker.io`, `docker-compose-v2`), with the user in the `docker` group. On GNOME logging out may not apply the new group; a reboot does.
@@ -499,7 +510,9 @@ The output must end with `Energy Core [J]` and `Energy PKG [J]` values. On AMD t
 
 ## 6. Full build & run
 
-### 6a. Cross-build on WSL2
+### 6a. Cross-build on WSL2 — retired
+
+*Historical, see M-A21.*
 
 Since the base image is itself the Kria arm64 rootfs (§11), the cross-build pulls it through QEMU. This works — buildx handles the arm64 base natively — but the first build is substantially heavier than it was against a stock `ubuntu` base: several GB of image to fetch before any layer is compiled, all subsequent compilation emulated.
 
@@ -520,7 +533,7 @@ docker run --rm --entrypoint readelf myrtus-psm-edge:arm64 -h server | grep Mach
 DOCKER_DEFAULT_PLATFORM=linux/arm64 docker compose -f compose-server.yml up --build
 ```
 
-Since M-A16 compose builds for the host by default: without the variable the result on WSL2 is an amd64 image, and the banner says so. This path has not been re-run since M-A16.
+Since M-A16 compose builds for the host by default: without the variable the result on WSL2 is an amd64 image, and the banner says so. This path was retired in M-A21 without being re-run: under QEMU no backend can register (M-A14, M-A7).
 
 The cross-build remains useful for catching compile errors without occupying the board, but the board is now the faster path for a full clean build.
 
@@ -553,7 +566,7 @@ docker compose -f compose-server.yml up --build
 
 - `Registering Implementation in ./f1 … ./f8` followed by `Done`
 - `Creating Shared Library lib_enc.so` with **no `ld` error** beneath it
-- `platform: debian-arm64` on the board and on the cross-build, `platform: debian-amd64` on an x86-64 host — `amd64` on the cross-build means `DOCKER_DEFAULT_PLATFORM` was not set (M-A16)
+- `platform: debian-arm64` on the board, `platform: debian-amd64` on an x86-64 host
 - **no** `Error setting socket opts: Operation not permitted` — that means it was not launched privileged, i.e. not via compose
 
 `Registering Implementation in ./fN` is printed whatever the outcome, because `start.sh` discards `register`'s output. Whether all eight registered is checked in §7, not read from the log.
@@ -624,7 +637,7 @@ The server writes each received file to `/app/Downloads/filename-ekm<N>`, where 
 | Round-trip low (`-s 0`, 5545) | `10016 bytes`, `cmp` identical | — | ✅ since M-A18 | ✅ since M-A18 |
 | Crypto extensions in `/proc/cpuinfo` | `aes pmull sha1 sha2` | n/a | ✅ | n/a |
 
-Everything that passed under emulation also passes on the silicon: no part of the port was an artefact of QEMU. The QEMU column predates M-A16 and M-A18 and has not been re-run (§9).
+Everything that passed under emulation also passes on the silicon: no part of the port was an artefact of QEMU. The QEMU column is historical: it predates M-A14, after which no backend can register under emulation, and the cross-build was retired in M-A21.
 
 > **x86-64 — re-validated on bare metal at `07ac3df`.** AMD Ryzen 5 3500U (Zen+), bare-metal Ubuntu, Docker Engine, prerequisites as in §5c. Build with no argument (M-A16), eight backends registered, both levels byte-identical. Energy comes from `likwid-perfctr -g ENERGY` and `profile01.c` records the **`Energy Core [J]`** line, i.e. RAPL's per-core domain, as upstream does. Figures from the first full walk, per 50 000 iterations:
 >
@@ -720,6 +733,7 @@ Issues 1 and 2 were architectural, not defects introduced by the port, and are n
 - `TAG MISMATCH` and corrupted files on the low security level, present since upstream (M-A18).
 - Registration hanging forever on x86-64 when likwid cannot start the counters, and backends registered with zero energy when it cannot measure at all (M-A19).
 - `rfile` and `Downloads/`, removed together with the repository's leftovers (M-A17).
+- The cross-build on WSL2, retired rather than re-validated, since under emulation no backend can register (M-A21).
 
 ### Remaining work
 
@@ -738,9 +752,7 @@ Issues 1 and 2 were architectural, not defects introduced by the port, and are n
 
 **6. Decrypted data is written before the tag is checked (secondary).** The server decrypts chunk by chunk and writes each one with `fwrite` as it goes; the tag is verified only in `dec_final`, at the end. On a mismatch it prints `TAG MISMATCH` and keeps the file, and the client is not told. With the level right (M-A18) the tag verifies and the file is correct, so this does not affect normal operation. It matters as soon as the prototype is presented as protecting integrity: an AEAD should never release unauthenticated plaintext. Writing to a temporary name and renaming only after a successful `dec_final`, or deleting the file on a mismatch, would close it.
 
-**7. Cross-build path on WSL2 not re-run since M-A16.** The QEMU column of §7 predates M-A16 and M-A18. The cross-build now needs `DOCKER_DEFAULT_PLATFORM=linux/arm64` (§6a), which has not been exercised yet.
-
-**8. Test certificate (secondary).** `certs/certfile.crt` is self-signed and valid until 18 January 2027. The client does not verify it, so its expiry will not break transfers, but the client does not authenticate the server either. A certificate the client actually checks is the fix; renewing this one only moves the date.
+**7. Test certificate (secondary).** `certs/certfile.crt` is self-signed and valid until 18 January 2027. The client does not verify it, so its expiry will not break transfers, but the client does not authenticate the server either. A certificate the client actually checks is the fix; renewing this one only moves the date.
 
 ---
 
@@ -783,6 +795,7 @@ Oldest first. `git log --oneline --graph main` is the authoritative sequence. Th
 | `655b706` | build artefacts and `header.h` untracked | M-A20 |
 | `f9b0579` | sources nothing builds or includes removed | M-A20 |
 | `dbd62c2` | repository organised into `src/`, `backends/`, `certs/`, `tools/`, `test/` | M-A20 |
+| `976ac46` | documentation for the new layout and the `main` branch | M-A20 |
 
 The ARM work falls into four phases: **make it build** (`9207e41` … `c992b51`), **make it register and run correctly** (`af69ca9` … `9a902ab`), **move it onto the board's own userspace** (`e5edc89` … `ad1385f`), and **clean up and correct the base** (`dc78a00` … `66baa82`). A fifth, **measure and validate on both architectures** (`7debc15` … `07ac3df`), brought the INA260 energy path and the first bare-metal x86-64 validation of the current tree. A sixth, **clean up the repository** (`655b706` … `dbd62c2`), left only what the component needs.
 

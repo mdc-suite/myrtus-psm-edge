@@ -12,7 +12,7 @@ This guide assumes a Windows host with WSL2, since that is what the project was 
 - **microSD card**, 32 GB or larger — the OS image plus the container images will use most of it
 - **USB-A to micro-USB cable** for the serial console
 - **Ethernet cable** between the board and the host PC
-- On the host: [balenaEtcher](https://etcher.balena.io/), [PuTTY](https://www.putty.org/), and WSL2 with Docker Desktop
+- On the host: [balenaEtcher](https://etcher.balena.io/), [PuTTY](https://www.putty.org/), and WSL2
 
 ### Boot firmware
 

@@ -6,7 +6,6 @@ Crypto-agile TLS prototype with eight runtime-selectable AES backends, running o
 **Upstream:** https://github.com/subhadeep-banik/spdocker
 **Branch:** `main` (the port branch, formerly `al3monni-test-arm`) · **x86 baseline:** `ddb5f5f`, re-validated on the current tree
 **Target hardware:** AMD/Xilinx Kria KV260 — Zynq UltraScale+ MPSoC, 4× Cortex-A53, aarch64
-**Cross-build host:** Windows + WSL2 (Ubuntu) + Docker Desktop, `linux/arm64` under QEMU
 **On-board host:** Ubuntu 22.04 IoT, Docker Engine, native aarch64 build
 **x86-64 host:** bare-metal Ubuntu, Docker Engine, native amd64 build
 **Base image:** [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu) (arm64/v8) on aarch64, `ubuntu:22.04` on x86-64 — chosen automatically
@@ -79,24 +78,14 @@ Check that your user is in the `docker` group (`docker version` should respond w
 
 ### On an x86-64 host (bare metal)
 
-Needed only to measure energy on x86-64: WSL2, Docker Desktop and virtual machines hide the RAPL registers likwid reads. On bare-metal Linux with Docker Engine:
+x86-64 needs bare-metal Linux with Docker Engine. Every backend is measured when it registers, and one that cannot be measured is not registered: under WSL2, Docker Desktop or a virtual machine likwid finds no RAPL registers, so the image builds but no backend registers. On bare metal:
 
 - **Secure Boot disabled.** With Secure Boot on, the kernel refuses raw MSR access and likwid cannot start its counters; `cat /sys/kernel/security/lockdown` must read `[none]`. On a machine that dual-boots Windows with BitLocker, have the recovery key ready before changing the setting.
 - **The `msr` module loaded**, after every boot: `sudo modprobe msr` (or add `msr` to `/etc/modules-load.d/`).
 
 `LOGBOOK.md` §5c has the checks, including how to confirm from inside the container that likwid reads the `ENERGY` group.
 
-### On an x86 dev host (cross-build)
-
-Windows + WSL2 + Docker Desktop, with WSL integration enabled for the Ubuntu distro. Because the base image is an arm64 rootfs, you also need the QEMU binfmt handler registered once per WSL VM:
-
-```bash
-docker run --privileged --rm tonistiigi/binfmt --install arm64
-```
-
-This does not survive `wsl --shutdown` — re-run it if you get `exec format error`.
-
-The cross-build is useful for catching compile errors without occupying the board, but everything runs emulated and a clean build is slower than on the board itself.
+There is no cross-build: the aarch64 image is built on the board itself. Emulating arm64 on an x86 host would compile it but could not register any backend, since registration measures energy through the board's INA260.
 
 Every host builds for its own architecture by default, and all eight backends build on both: `f7` and `f8` carry both AES implementations and pick one at compile time, AES-NI on x86-64 and the ARMv8 Crypto Extensions on the Kria.
 
@@ -126,15 +115,6 @@ sudo modprobe msr
 docker compose -f compose-server.yml up --build
 ```
 
-### Cross-build on the x86 dev host
-
-Compose builds for the host by default, so the cross-build has to ask for arm64:
-
-```bash
-docker run --privileged --rm tonistiigi/binfmt --install arm64   # once per WSL VM
-DOCKER_DEFAULT_PLATFORM=linux/arm64 docker compose -f compose-server.yml up --build
-```
-
 ### What a successful start looks like
 
 ```
@@ -149,7 +129,7 @@ OpenSSL 3.0.2 15 Mar 2022 (Library: OpenSSL 3.0.2 15 Mar 2022)
 platform: debian-arm64
 ```
 
-Two things to check in that output: `Creating Shared Library` is not followed by an `ld` error, and the platform matches what you meant to build — `debian-arm64` on the board and on the cross-build, `debian-amd64` on an x86-64 host.
+Two things to check in that output: `Creating Shared Library` is not followed by an `ld` error, and the platform matches the host — `debian-arm64` on the board, `debian-amd64` on an x86-64 host.
 
 The `Registering Implementation` lines are printed whatever happens, because `start.sh` discards the output of each registration. Whether all eight backends registered is checked in the next section, not read from the log.
 
