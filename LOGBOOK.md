@@ -4,14 +4,15 @@ This document records **every** modification required to take the project from t
 
 **Repo:** https://github.com/mdc-suite/myrtus-psm-edge
 **Upstream:** https://github.com/subhadeep-banik/spdocker
-**Port branch:** `al3monni-test-arm` · **x86 baseline:** `al3monni-test` (`ddb5f5f`)
+**Port branch:** `al3monni-test-arm` · **x86 baseline:** `al3monni-test` (`ddb5f5f`), re-validated on the current tree at `07ac3df` (§7)
 **Target hardware:** AMD/Xilinx Kria KV260 — Zynq UltraScale+ MPSoC, 4× Cortex-A53, aarch64
 **Cross-build host:** Windows + WSL2 (Ubuntu) + Docker Desktop, `linux/arm64` under QEMU
 **On-board host:** Ubuntu 22.04 IoT, Docker Engine, native aarch64 build
-**Base image:** [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu) (arm64/v8) — see §11
-**Status:** ✅ **Validated on real silicon.** Builds, registers all 8 implementations, serves over TLS, and round-trips byte-identical (`cmp`) on the Kria KV260. Energy is measured on ARM through the on-SOM INA260 — see M-A14.
+**x86-64 host:** bare-metal Ubuntu (dual boot) on an AMD Ryzen 5 3500U (Zen+), Docker Engine, native amd64 build
+**Base image:** [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu) (arm64/v8) on aarch64, `ubuntu:22.04` on x86-64 — chosen from the build architecture, see §11
+**Status:** ✅ **Validated on real silicon, on both architectures.** Builds, registers all 8 implementations, serves over TLS, and round-trips byte-identical (`cmp`) on both security levels, on the Kria KV260 and on a bare-metal x86-64 host. Energy is measured on ARM through the on-SOM INA260 (M-A14) and on x86-64 through RAPL (§7).
 
-> Derived from [spdocker](https://github.com/subhadeep-banik/spdocker) by Subhadeep Banik. Changes needed to build on x86 are marked **[baseline]**; ARM-specific changes **[arm]**; changes that emerged only on real hardware **[hw]**.
+> Derived from [spdocker](https://github.com/subhadeep-banik/spdocker) by Subhadeep Banik. Changes needed to build on x86 are marked **[baseline]**; ARM-specific changes **[arm]**; changes that emerged only on real hardware **[hw]**; changes that apply to both architectures **[both]**; changes to the x86-64 path only **[x86]**.
 > Board bring-up (flashing, networking, Docker install) is documented separately in [`KRIA_KV260_DEPLOYMENT.md`](KRIA_KV260_DEPLOYMENT.md).
 
 ---
@@ -32,9 +33,9 @@ reset  →  register ×8  →  gcc -shared ./LIB/*.o -o ./LIB/lib_enc.so  →  .
 - `register -c ./fN/config.txt` — compiles fN, runs a known-answer test (KAT), renames its internal symbols, drops `enc_sXX_nYY.o` into `LIB/`
 - `server` — `dlopen("./LIB/lib_enc.so")`, then `dlsym("enc_s%02d_n%02d")` per the mode byte
 
-The **registration order is the numbering contract** — client and server must agree on it, or the same mode byte selects different ciphers on each side (see §8).
+The **registration order is the numbering**: it decides which `fN` a given mode byte selects. The client does not depend on it — it never loads `lib_enc.so` — but everything that names a backend by number does (see §8).
 
-Both the x86-64 baseline and the aarch64 port are validated end-to-end by a byte-identical `cmp` on a 10000-byte file transfer; the aarch64 path has been re-validated on the Kria KV260 itself, not only under emulation.
+Both architectures are validated end-to-end by a byte-identical `cmp` on a 10000-byte file transfer, on both security levels: aarch64 on the Kria KV260 itself, not only under emulation, and x86-64 on bare metal (§7).
 
 ---
 
@@ -64,7 +65,7 @@ Added to keep the build context small and avoid copying host cruft into the imag
 
 ---
 
-## 4. ARM-specific modifications
+## 4. Port modifications
 
 Each is a single, independently-validated change, in the order they surfaced during the cross-build. Filenames are relative to repo root. All were re-verified on the Kria board after the cross-build path was complete.
 
@@ -210,6 +211,8 @@ Same approach as M-A8, adapted for AES-256: **14 rounds** (13× `vaese` + `vaesm
 This is the single most instructive failure in the port: a green exit status, a passing unit test, and a silently incomplete result. Always run `./reset` before a fresh walk, and always check the object count in `LIB/` rather than trusting `register`'s return value.
 
 ### M-A11 — pin compose platform to arm64 [arm] · `compose-server.yml`
+*(Superseded by M-A16: the pin is gone, every host builds for its own architecture, and the cross-build asks for arm64 explicitly. Kept for the record and for the banner check, which still applies.)*
+
 **Symptom:** `docker compose ... up --build` produced a working server whose banner read `platform: debian-amd64` — compose builds for the **host** architecture by default (amd64 on the x86 dev box), silently ignoring the arm64 image previously built via `buildx --platform`. The container ran, registered its implementations and served correctly; only the banner revealed that none of the ARM work was being exercised.
 
 **Fix:** add `platform: linux/arm64` under the `ssl-server` service:
@@ -328,11 +331,72 @@ endif
 
 **Validated:** both branches produce the FIPS-197 vectors and are byte-identical to each other — `69c4e0d86a7b0430d8cdb78070b4c55a` for AES-128, `8ea2b7ca516745bfeafc49904b496089` for AES-256 — compiled natively on x86-64, and cross-compiled for aarch64 and run under `qemu-aarch64-static`. A full `f1`→`f8` walk on x86-64 registers eight backends. On the Kria, `db.yaml` still holds eight, with `enc_s01_n04` at 0.573 s / 0.0844 J and `enc_s02_n04` at 0.731 s / 0.1062 J — the M-A14 characterisation figures, so merging the two branches left the ARM path where it was.
 
+M-A16 to M-A19 came out of the first validation of the current tree on a bare-metal x86-64 host, run together with a re-validation on the board (29–30 September 2026). Each was validated on both machines unless stated otherwise.
+
+### M-A16 — base image and platform from the build architecture [both] · `Dockerfile`, `compose-server.yml` · `177bfef`
+**Symptom:** M-A11 pinned the compose service to `linux/arm64`, and M-A15 made the base a build argument whose default is the arm64-only board image. On an x86-64 host the pin applies to the build as well, so `docker compose ... build --build-arg BASE=ubuntu:22.04` — the command §7 used to document for x86-64 — still produces an arm64 image. Building x86-64 through compose was not possible without editing the compose file.
+
+**Fix:** the base is chosen from `TARGETARCH`, which BuildKit sets, with one stage per architecture:
+
+```dockerfile
+ARG TARGETARCH
+FROM al3monni/kria-ubuntu:22.04.5 AS base-arm64
+FROM ubuntu:22.04 AS base-amd64
+FROM base-${TARGETARCH} AS build-env
+```
+
+and `platform: linux/arm64` is removed from `compose-server.yml`. Every host now builds natively with the same command and no arguments. BuildKit builds only the stages the target depends on, so an x86-64 build never pulls the board image. The cross-build on WSL2 asks for arm64 explicitly with `DOCKER_DEFAULT_PLATFORM=linux/arm64` (§6a).
+
+`ubuntu:22.04` is the same release as the board image, so both architectures compile against the same toolchain and the same OpenSSL (3.0.2, confirmed by the banner on both).
+
+**Validated:** on the x86-64 host the build log shows only `base-amd64` and the banner reads `platform: debian-amd64`; on the board, `platform: debian-arm64` with the build cache intact. The cross-build path on WSL2 has not been re-run since this change (§9).
+
+### M-A17 — restore the round-trip input and the received-files directory [both] · `rfile`, `start.sh` · `f44d204`, `a7fc710`
+`fec03c9` removed files that were never part of the project, and with them two that the runtime path needs:
+
+- **`rfile`**, the 10000-byte input of the round-trip test (§7). Restored from the commit before `fec03c9`.
+- **`Downloads/`**, where `server_f.c` writes every received file (`./Downloads/filename-ekm%d`) without ever creating the directory. It used to exist because a file inside it was tracked. Without it the server cannot create the file and the transfer is lost silently. `start.sh` now runs `mkdir -p Downloads` before `./server`, so the directory no longer depends on the repository.
+
+### M-A18 — start each port on a backend of its own security level [both] · `server_f.c` · `eb16eb4`
+**Symptom:** a transfer on the low security level (`./client -s 0` on port 5545) writes 10000 bytes that differ from `rfile` from the first byte, and the server log reports `TAG MISMATCH`. Identical on x86-64 and on the board, and present in upstream: not a port regression. The high level (`-s 1`, 5544) is correct.
+
+**Cause:** the server keeps the selection in one global, `volatile int mode = 98;`, and `main` forks one process per port, so both start from 98 = `0x62` = `enc_s02_n02`, an AES-256 backend. On 5545 the client encrypts with OpenSSL's AES-128-GCM, which uses the first 16 bytes of the exported key; the server decrypts with AES-256, which uses all 32. The keystream differs from the first block on. The server does prepare the right OpenSSL cipher for each port (`server_f.c`, `EVP_CIPHER_fetch`), but uses it only when `mode == 0`; the external-GCM path is driven by `mode` alone and ignores the port.
+
+It went unnoticed because §7 only ever tested `-s 1` on 5544. Confirmed before the fix by moving 5545 to an AES-128 backend with the intended mechanism, `./send 5545 81` (`0x51` = `enc_s01_n01`): the transfer became byte-identical.
+
+**Fix:** at the top of `createserver(port)`:
+
+```c
+mode = (port == 5544) ? 0x62 : 0x52;   /* enc_s02_n02 / enc_s01_n02 */
+```
+
+5544 keeps upstream's default; 5545 starts on its AES-128 counterpart, `enc_s01_n02` (f2). `send` and `synthesize` are unaffected.
+
+**Validated:** both levels byte-identical without any `send`, and the server log reads `Starting with enc_s02_n02` on 5544 and `Starting with enc_s01_n02` on 5545. Two related weaknesses remain, both upstream and both secondary (§9): `send` accepts a mode of the wrong level, and the server writes decrypted data before the tag is checked.
+
+### M-A19 — fail x86 profiling instead of hanging [x86] · `profile01.c` · `07ac3df`
+**Symptom:** on a bare-metal Ubuntu host with Secure Boot enabled, the container stops at `Registering Implementation in ./f1` and never goes further. `likwid-perfctr` sits in state `T` (stopped), reparented away from `profile`, and `profile` waits forever.
+
+**Cause, in three layers:**
+1. Secure Boot puts the kernel in `integrity` lockdown, which refuses raw MSR writes: `dmesg` shows `Lockdown: likwid-accessD: raw MSR access is restricted`. likwid reports `MSR write operation failed` and `Error starting counters`, with a misleading `No such file or directory` left over from an earlier call.
+2. In wrapper mode `likwid-perfctr` forks the measured program, stops it with `SIGSTOP`, programs the counters and resumes it with `SIGCONT`. When *setting up* the counters fails it kills the child before exiting; when *starting* them fails it exits without killing it (likwid 5.5.1, `likwid-perfctr.lua`, the `startCounters` error path).
+3. The stopped child keeps the write end of `popen`'s pipe open, so `fgets` in `profile01.c` never sees EOF. `start.sh` sends `register`'s output to `/dev/null`, so none of this reaches the container log.
+
+A second defect sits next to it: when likwid fails *before* forking (for instance with no `msr` module loaded), nothing hangs, but `profile` parses nothing and writes a time and an energy of zero into `db.yaml`, and the backend registers as if it had been measured.
+
+**Fix**, in the x86-64 branch only (the aarch64 branch is untouched):
+- before the measurement, a probe with `likwid-perfctr -f -g ENERGY -C <cpu> -S 100ms`, which forks nothing and therefore fails cleanly; if it fails, `profile` exits with an error;
+- after the measurement, if time or energy is not positive, `profile` exits with an error instead of writing zeros.
+
+In both cases `gen.c` already does the right thing with a non-zero status (M-A7): the backend is not registered and `header.h` is left alone.
+
+**Validated:** a normal walk still registers eight backends with no zero energy. With the `msr` module unloaded, registering f1 fails within seconds with `profile: likwid cannot start the ENERGY counters on cpu 0, enc_s01_n01 not measured`, `header.h` stays at `///1-00` and `db.yaml` stays empty. The Secure Boot case itself is fixed on the host, not in the code (§5c).
+
 ---
 
 ## 5. Host prerequisites
 
-The project has two build paths. §5a is the dev-host cross-build, used to iterate quickly; §5b is the native build on the target. They share the same source tree and the same compose file.
+The project has three build paths. §5a is the dev-host cross-build, used to iterate quickly; §5b is the native build on the target; §5c is the native x86-64 build, the only one that measures x86 energy. They share the same source tree and the same compose file.
 
 ### 5a. Cross-build host (WSL2 / Docker Desktop)
 
@@ -347,7 +411,7 @@ docker run --privileged --rm tonistiigi/binfmt --install arm64
 
 This is per-WSL-VM and does **not** survive `wsl --shutdown`; re-run it if `exec format error` reappears.
 
-Also needed here and not on the board: `docker buildx` for the `--platform linux/arm64` build.
+Also needed here and not on the board: `docker buildx` for the `--platform linux/arm64` build, and `DOCKER_DEFAULT_PLATFORM=linux/arm64` for compose (M-A16).
 
 ### 5b. Native host (Kria KV260)
 
@@ -367,6 +431,38 @@ All four must appear, or f7/f8 (M-A8/M-A9) will not have the instructions they c
 5. **Disk headroom on the microSD.** The base image (§11) is a couple of GB compressed and several more unpacked, before any application layer is built on top.
 
 Not needed on the board: buildx, binfmt/QEMU registration, and any `--platform` flag.
+
+### 5c. Native x86-64 host (bare metal)
+
+Needed only to measure energy on x86-64. Build, registration and the round trip work on WSL2 too; the energy figures do not.
+
+1. **Bare-metal Linux.** WSL2, Docker Desktop and virtual machines run a kernel that exposes no RAPL MSRs, and likwid fails with `Cannot get access to MSRs`. A dual boot or a spare machine is enough; a live USB without persistence loses Docker and the image at every reboot.
+2. **Docker Engine** and the compose plugin (`docker.io`, `docker-compose-v2`), with the user in the `docker` group. On GNOME logging out may not apply the new group; a reboot does.
+3. **Secure Boot disabled.** With Secure Boot on, the kernel is in lockdown and refuses raw MSR access (M-A19). Check:
+
+```bash
+mokutil --sb-state                       # SecureBoot disabled
+cat /sys/kernel/security/lockdown        # [none] integrity confidentiality
+```
+
+On a machine that dual-boots Windows with BitLocker or device encryption, have the recovery key at hand before changing the setting: Windows will ask for it at the next boot.
+
+4. **The `msr` module loaded**, after every boot:
+
+```bash
+sudo modprobe msr && ls /dev/cpu/0/msr
+```
+
+To load it at boot instead: `echo msr | sudo tee /etc/modules-load.d/msr.conf`.
+
+5. **likwid reads the ENERGY group** from inside the container, before a full start:
+
+```bash
+docker compose -f compose-server.yml run --rm --entrypoint sh ssl-server \
+  -c 'likwid-perfctr -f -g ENERGY -C 0 -S 1s'
+```
+
+The output must end with `Energy Core [J]` and `Energy PKG [J]` values. On AMD the kernel exposes RAPL under the name `intel-rapl` as well; likwid 5.5.1 recognises Zen+ (`AMD K17 (Zen+) architecture`).
 
 ---
 
@@ -390,9 +486,11 @@ docker buildx build --platform linux/arm64 -t myrtus-psm-edge:arm64 --load .
 docker run --rm --entrypoint readelf myrtus-psm-edge:arm64 -h server | grep Machine
 #   -> Machine:  AArch64
 
-# run via compose
-sudo docker compose -f compose-server.yml up --build
+# run via compose, asking for arm64 explicitly (M-A16)
+DOCKER_DEFAULT_PLATFORM=linux/arm64 docker compose -f compose-server.yml up --build
 ```
+
+Since M-A16 compose builds for the host by default: without the variable the result on WSL2 is an amd64 image, and the banner says so. This path has not been re-run since M-A16.
 
 The cross-build remains useful for catching compile errors without occupying the board, but the board is now the faster path for a full clean build.
 
@@ -410,12 +508,27 @@ docker compose -f compose-server.yml up --build
 
 Reference timings from a clean build on the KV260: ~135 s for the `apt-get` layer, ~371 s for likwid, ~600 s total. Subsequent builds resume from the `COPY . .` layer thanks to M-A2.
 
-### Pass conditions in the log (both paths)
+### 6c. Native build on x86-64
+
+After the prerequisites of §5c, the same command as on the board, with no build argument:
+
+```bash
+git clone https://github.com/mdc-suite/myrtus-psm-edge.git
+cd myrtus-psm-edge
+git checkout al3monni-test-arm
+
+sudo modprobe msr
+docker compose -f compose-server.yml up --build
+```
+
+### Pass conditions in the log (all paths)
 
 - `Registering Implementation in ./f1 … ./f8` followed by `Done`
 - `Creating Shared Library lib_enc.so` with **no `ld` error** beneath it
-- `platform: debian-arm64` — if this reads `amd64` on the cross-build, M-A11 did not take
+- `platform: debian-arm64` on the board and on the cross-build, `platform: debian-amd64` on an x86-64 host — `amd64` on the cross-build means `DOCKER_DEFAULT_PLATFORM` was not set (M-A16)
 - **no** `Error setting socket opts: Operation not permitted` — that means it was not launched privileged, i.e. not via compose
+
+`Registering Implementation in ./fN` is printed whatever the outcome, because `start.sh` discards `register`'s output. Whether all eight registered is checked in §7, not read from the log.
 
 Background it once verified: `Ctrl-C`, then re-run with `-d`.
 
@@ -426,8 +539,8 @@ Background it once verified: `Ctrl-C`, then re-run with `-d`.
 Run these against a container that has completed its startup pipeline. Commands take the *container* name `Test-server`, not the service name (see the note in M-A11). On the board, `sudo` is required until the SSH session has been re-established after `usermod -aG docker`.
 
 ```bash
-# the binaries are actually aarch64
-docker exec Test-server readelf -h /app/server | grep Machine     # -> AArch64
+# the binaries match the host
+docker exec Test-server readelf -h /app/server | grep Machine     # -> AArch64 / Advanced Micro Devices X86-64
 
 # 8 objects + the shared lib, all freshly timestamped
 docker exec Test-server ls -la /app/LIB
@@ -438,51 +551,67 @@ docker exec Test-server sh -c 'nm -D /app/LIB/lib_enc.so | grep enc_s'
 # counters must read 4 per level
 docker exec Test-server sh -c 'grep "///" /app/header.h'          # ///1-04  ///2-04
 
+# 8 measured backends, none with a zero energy
+docker exec Test-server sh -c 'grep -c "^name" /app/db.yaml; grep -c "energy: 0.000000" /app/db.yaml'   # 8, 0
+
 # server listening
 docker exec Test-server sh -c 'lsof -i -P -n | grep LISTEN'       # *:5544, *:5545
 ```
 
 ### End-to-end round trip
 
-The authoritative correctness test is a file transfer compared byte for byte. `rfile` (10000 bytes) is committed in the repo for this purpose.
+The authoritative correctness test is a file transfer compared byte for byte, **on both security levels**. `rfile` (10000 bytes) is committed in the repo for this purpose.
+
+| level | client | port | cipher |
+|---|---|---|---|
+| high | `-s 1` | 5544 | AES-256-GCM |
+| low | `-s 0` | 5545 | AES-128-GCM |
+
+`-s` accepts only `0` and `1`; any other value leaves the client without a cipher and the server reports `TAG MISMATCH` (§9, issue 5).
 
 ```bash
-docker exec -it Test-server sh -c 'cd /app && ./client -s 1 -i 127.0.0.1:5544 -f rfile'
+for p in "1 5544" "0 5545"; do set -- $p
+  docker exec Test-server sh -c "cd /app && rm -f Downloads/*; ./client -s $1 -i 127.0.0.1:$2 -f rfile 2>&1 | tail -1; sleep 3; for f in Downloads/*; do cmp rfile \$f && echo IDENTICAL -s $1 port $2; done"
+done
+docker logs Test-server 2>&1 | grep -E "Starting with|MISMATCH"
 ```
 
-Expected on success: handshake completes, then `Entire File Sent 10016 bytes` — 10000 bytes of payload plus the 16-byte AEAD tag.
+Expected: `Entire File Sent 10016 bytes` (10000 bytes of payload plus the 16-byte AEAD tag) and `IDENTICAL` for each level; in the log, `Starting with enc_s02_n02` and `Starting with enc_s01_n02` and no `TAG MISMATCH`.
 
-The server writes the received file to `/app/Downloads/filename-ekm<N>`, where `<N>` is derived from the TLS session's exported keying material and therefore **changes on every connection**. List the directory to find the current name, then compare:
+The server writes each received file to `/app/Downloads/filename-ekm<N>`, where `<N>` is `rand() & 0xffff`, not anything derived from the session. Run the transfers one at a time: the two server processes seed `rand()` in the same second and generate the same sequence of names, so simultaneous transfers on the two ports can write into the same file (§9, issue 6).
 
-```bash
-docker exec Test-server sh -c 'cd /app && ls -l Downloads/'
-docker exec Test-server sh -c 'cd /app && cmp rfile Downloads/filename-ekm<N> && echo IDENTICAL'
-```
-
-`cmp` is the test that matters. The server's own byte counter is unreliable (§9, issue 3), so a plausible-looking log line is not evidence of a correct transfer; only `cmp` is.
+`cmp` is the test that matters. The server's own byte counter is unreliable (§9, issue 3), and the server saves a file even when the tag does not verify, without telling the client (§9, item 6): neither `Entire File Sent` nor the file's size is evidence of a correct transfer; only `cmp` is.
 
 ### Reference baseline
 
-| Check | Expected | aarch64 (QEMU) | Kria KV260 |
-|---|---|---|---|
-| OpenSSL banner | `platform: debian-arm64` | ✅ | ✅ |
-| `LIB/` contents | 8 × `enc_s0*.o` + `lib_enc.so` | ✅ | ✅ |
-| `nm -D` | `enc_s01_n01`..`n04`, `enc_s02_n01`..`n04`, all `T` | ✅ | ✅ |
-| `header.h` | `///1-04`, `///2-04` | ✅ | ✅ |
-| f1–f8 registration | exit 0, 0 symbol clashes, 0 KAT failures | ✅ | ✅ |
-| Round-trip (10000 B) | `10016 bytes` on the wire | ✅ | ✅ |
-| `cmp` | identical | ✅ | ✅ |
-| Crypto extensions in `/proc/cpuinfo` | `aes pmull sha1 sha2` | n/a | ✅ |
+| Check | Expected | aarch64 (QEMU) | Kria KV260 | x86-64 (bare metal) |
+|---|---|---|---|---|
+| OpenSSL banner | `platform: debian-arm64` / `debian-amd64` | ✅ | ✅ | ✅ |
+| `LIB/` contents | 8 × `enc_s0*.o` + `lib_enc.so` | ✅ | ✅ | ✅ |
+| `nm -D` | `enc_s01_n01`..`n04`, `enc_s02_n01`..`n04`, all `T` | ✅ | ✅ | ✅ |
+| `header.h` | `///1-04`, `///2-04` | ✅ | ✅ | ✅ |
+| f1–f8 registration | exit 0, 0 symbol clashes, 0 KAT failures | ✅ | ✅ | ✅ |
+| `db.yaml` | 8 entries, no zero energy | — | ✅ INA260 | ✅ RAPL |
+| Round-trip high (`-s 1`, 5544) | `10016 bytes`, `cmp` identical | ✅ | ✅ | ✅ |
+| Round-trip low (`-s 0`, 5545) | `10016 bytes`, `cmp` identical | — | ✅ since M-A18 | ✅ since M-A18 |
+| Crypto extensions in `/proc/cpuinfo` | `aes pmull sha1 sha2` | n/a | ✅ | n/a |
 
-Everything that passed under emulation also passes on the silicon: no part of the port was an artefact of QEMU.
+Everything that passed under emulation also passes on the silicon: no part of the port was an artefact of QEMU. The QEMU column predates M-A16 and M-A18 and has not been re-run (§9).
 
-> **x86-64 baseline status — partially re-validated.** The table above covers the aarch64 paths only. The x86-64 baseline was last validated end-to-end at commit `ddb5f5f` (branch `al3monni-test`); against the current tree, three things are now known.
+> **x86-64 — re-validated on bare metal at `07ac3df`.** AMD Ryzen 5 3500U (Zen+), bare-metal Ubuntu, Docker Engine, prerequisites as in §5c. Build with no argument (M-A16), eight backends registered, both levels byte-identical. Energy comes from `likwid-perfctr -g ENERGY` and `profile01.c` records the **`Energy Core [J]`** line, i.e. RAPL's per-core domain, as upstream does. Figures from the first full walk, per 50 000 iterations:
 >
-> *The image needs a base argument.* `al3monni/kria-ubuntu:22.04.5` is arm64-only, so on x86-64 every `RUN` dies with `exec /bin/sh: exec format error`. The `FROM` is parameterised (§11), and an x86-64 build is `docker compose -f compose-server.yml build --build-arg BASE=ubuntu:22.04`.
+> | backend | unhalted time [s] | energy [J] |
+> |---|---|---|
+> | `enc_s01_n01` | 0.3046 | 0.2028 |
+> | `enc_s01_n02` | 0.3883 | 0.2442 |
+> | `enc_s01_n03` | 20.2205 | 28.9497 |
+> | `enc_s01_n04` | 0.0740 | 0.0341 |
+> | `enc_s02_n01` | 0.3553 | 0.2282 |
+> | `enc_s02_n02` | 0.5073 | 0.3228 |
+> | `enc_s02_n03` | 26.5589 | 45.6612 |
+> | `enc_s02_n04` | 0.0755 | 0.0387 |
 >
-> *Build and registration pass.* A full `f1`→`f8` walk on x86-64 registers eight backends with all KATs passing, `-maes -msse4.1` included, since M-A15.
->
-> *Energy is not measurable under WSL2 or Docker Desktop.* likwid reports `Cannot get access to MSRs`: both run a virtualised kernel with no RAPL. This is the environment, not the code — the parsing path was exercised with a stub `likwid-perfctr` emitting a canned `ENERGY` table, and `db.yaml` filled correctly from it. Real x86-64 energy numbers need bare metal (a live USB, a lab machine or a dual boot) and remain open, as does the end-to-end round trip on x86-64.
+> The ranking matches the board's: the AES-NI backends (`n04`) are the fastest and cheapest, the bitsliced ones (`n03`) the slowest and most expensive. These are single measurements, not a characterisation like M-A14's, and core energy on this CPU is not comparable with the board-level INA260 figures (§9, item 3).
 
 ---
 
@@ -499,7 +628,18 @@ One byte encodes the choice (`encrypt02.c`):
 //             op = (function) dlsym(cx->handle, buf);
 ```
 
-Default `mode = 98 = 0x62 = 0110 0010` → `sbits=2, ibits=2` → **`enc_s02_n02`** (= f5). With M-A14 the registration walk fills `db.yaml` with real measurements on aarch64 too, so `synthesize` moves `mode` off 98: across the nine policy combinations of each security level all four backends are selected, `n04` at `-t 0 -e 0` and `n03` at `-t 2 -e 2`. Off-diagonal policies ("fast but expensive") are physically contradictory on this board, since energy is time times a nearly constant power, and `synthesize` returns the nearest point in the normalised plane, which is `n01` or `n02` — the two that sit within ~5% of each other.
+Upstream's default `mode = 98 = 0x62 = 0110 0010` → `sbits=2, ibits=2` → **`enc_s02_n02`** (= f5). Since M-A18 each port starts on its own level: 5544 at `0x62` (`enc_s02_n02`, f5), 5545 at `0x52` = 82 (`enc_s01_n02`, f2). With M-A14 the registration walk fills `db.yaml` with real measurements on aarch64 too, so `synthesize` moves `mode` off 98: across the nine policy combinations of each security level all four backends are selected, `n04` at `-t 0 -e 0` and `n03` at `-t 2 -e 2`. Off-diagonal policies ("fast but expensive") are physically contradictory on this board, since energy is time times a nearly constant power, and `synthesize` returns the nearest point in the normalised plane, which is `n01` or `n02` — the two that sit within ~5% of each other.
+
+### Algorithm and implementation
+
+Two choices are made in two different places, and keeping them apart explains most of what the component does.
+
+- **The security level is the algorithm**, and it is fixed per port. The client chooses it with `-s`: `1` connects to 5544 and encrypts with AES-256-GCM, `0` connects to 5545 and encrypts with AES-128-GCM (`cltest.c`). The client always uses OpenSSL and knows nothing of `mode`.
+- **The mode byte picks the implementation**, on the server only. Every backend computes one AES block (key and 16 bytes in, 16 bytes out); the GCM mode around it — counter, GHASH, tag — is written once in `encrypt02.c` and calls the backend block by block. With `mode == 0` the server uses OpenSSL's GCM instead.
+
+Because every backend of a level computes the same function, any of them interoperates with the client: changing implementation is invisible on the wire, changing level is not. That is what makes the switch safe at runtime: `dec_update` fetches the backend from `mode` for every 1024-byte chunk, so a new mode applies even in the middle of a transfer. Both key and IV come from the TLS session on both sides (`SSL_export_keying_material`, 64 bytes: key 0–31, IV 32–47); nothing about the cipher is negotiated beyond the TLS handshake itself.
+
+`synthesize -f e -s <level> -t <0|1|2> -e <0|1|2>` picks the backend of that level closest to the requested point of the normalised time/energy plane, and calls `./send <5544 + 2 − level> <64 + 16·level + index>`. `send` finds the process listening on that port with `lsof` and sends it `SIGUSR1` carrying the value, which the handler writes into `mode`. The port and the level come from the same number, so `synthesize` cannot select across levels; a `send` issued by hand can (§9, item 5). Nothing runs `synthesize` automatically: today the selection is a manual step.
 
 ### Implementation map — the contract (post-port)
 
@@ -514,7 +654,7 @@ Default `mode = 98 = 0x62 = 0110 0010` → `sbits=2, ibits=2` → **`enc_s02_n02
 | f6 | `aes256_ecb_encrypt` | bitsliced | `enc_s02_n03` | pure C, ports free |
 | f8 | `aes256` | **`-march=armv8-a+crypto`** (x86-64: `-maes -msse4.1`) | `enc_s02_n04` | **M-A9/M-A10/M-A15** — AES-NI and ARMv8 CE in one source, chosen by `uname -m` |
 
-Registration order **is** the numbering — the table above is a contract, not a description. Reordering the `register` calls in `start.sh` renumbers the symbols and silently breaks agreement with any client built against the old order.
+Registration order **is** the numbering — the table above is a contract, not a description. The client does not depend on it, since it never loads `lib_enc.so`. What depends on it is everything that names a backend by number: the initial modes in `server_f.c` (M-A18), any value passed to `send` by hand, and this table. Reordering the `register` calls in `start.sh` keeps every transfer correct, because the level does not change, but silently changes which implementation a given code selects.
 
 The f2/f5 `.s`-assembly concern from the original scope was resolved by observation: both Makefiles compile the C source directly and never assemble the `.s` files, so **no ARMv8 assembly rewrite was needed**.
 
@@ -526,7 +666,7 @@ On the Kria, f7 and f8 are the two backends that exercise the A53's crypto exten
 
 ## 9. Known issues & remaining work
 
-### Expected on aarch64 (not port bugs)
+### Known behaviour (not port bugs)
 
 | # | Symptom | Cause | Impact |
 |---|---|---|---|
@@ -534,8 +674,10 @@ On the Kria, f7 and f8 are the two backends that exercise the A53's crypto exten
 | 2 | `mode` stuck at `98` → always `enc_s02_n02` | was a consequence of #1 | **Resolved by M-A14**: `db.yaml` now carries measurements and `synthesize` selects on them (§8) |
 | 3 | `Recieved 9216 bytes` for a 10000 B file | the counter tallies 9×1024 chunks and drops the 784 B remainder | cosmetic — `cmp` proves the data is intact |
 | 4 | `rate inf bps` | elapsed time rounds to 0 → division by zero | cosmetic |
+| 5 | `TAG MISMATCH` with `-s 2` (or any value other than 0 and 1) | `cltest.c` sets a cipher only for `slevel == 0` and `1`, and does not validate the argument | use `-s 0` or `-s 1` |
+| 6 | the same received file name on both ports | both server processes call `srand(time(NULL))` in the same second, so they draw the same sequence of names; the `file_exists` loop protects sequential transfers only | run transfers one at a time |
 
-Issues 1 and 2 were architectural, not defects introduced by the port, and are now closed; 3 and 4 are upstream reporting bugs present on x86 as well.
+Issues 1 and 2 were architectural, not defects introduced by the port, and are now closed; 3 to 6 are upstream behaviour present on both architectures.
 
 ### Resolved by this port
 
@@ -544,6 +686,10 @@ Issues 1 and 2 were architectural, not defects introduced by the port, and are n
 - likwid profiler hang and manifest corruption (M-A7): the profiler no longer runs through likwid on ARM, and a failed measurement can no longer wipe the manifest.
 - Energy measurement on aarch64 (M-A14): measured through the INA260, characterised over 8 h, and driving backend selection again.
 - Full aarch64 validation on real silicon, not only under emulation (§7).
+- x86-64 on bare metal: native build without arguments (M-A16), energy measured through RAPL, both levels byte-identical (§7).
+- `TAG MISMATCH` and corrupted files on the low security level, present since upstream (M-A18).
+- Registration hanging forever on x86-64 when likwid cannot start the counters, and backends registered with zero energy when it cannot measure at all (M-A19).
+- `rfile` and `Downloads/`, removed together with the repository's leftovers (M-A17).
 
 ### Remaining work
 
@@ -554,9 +700,15 @@ Issues 1 and 2 were architectural, not defects introduced by the port, and are n
 
 **2. Cycle-unit reconciliation.** `cntvct_el0` counts generic-timer ticks at a fixed frequency, not CPU cycles (M-A3). Any timing figure derived from it is in the wrong units for comparison against x86 results; `cycle_freq()` provides the conversion factor and must be applied when real measurements are wired up.
 
-**3. x86-64 energy on bare metal.** The x86-64 build and registration paths are re-validated against the current tree and f7/f8 build there again (M-A15), but the energy figures are not: likwid needs RAPL MSRs, which WSL2 and Docker Desktop do not expose. Only the parsing was checked, with a stub `likwid-perfctr`. Producing real x86-64 numbers — and with them any cross-platform comparison, bearing in mind that RAPL is package energy while the INA260 is board-level — needs a bare-metal x86-64 Linux host. The end-to-end round trip has not been re-run there either. See the note at the end of §7.
+**3. Cross-platform energy comparison.** Both architectures now produce real energy figures (§7), but they measure different things: `profile01.c` records RAPL's per-core domain on x86-64, while the INA260 measures the whole SOM on the board, as a delta against idle. The x86-64 figures are also single measurements, not a characterisation like M-A14's. Comparing *rankings* across platforms is sound; comparing joules is not, and any cross-platform statement has to say so.
 
-**4. Optional upstream fixes.** Initialise `bool rval = 0;` in `register.c`; return non-zero from `register` when `collide()` refuses, so a skipped implementation is not reported as success; check that the `check%d.c` template exists *before* opening `test%d.c` for writing.
+**4. Optional upstream fixes.** Initialise `bool rval = 0;` in `register.c`; return non-zero from `register` when `collide()` refuses, so a skipped implementation is not reported as success; check that the `check%d.c` template exists *before* opening `test%d.c` for writing; let `start.sh` keep `register`'s standard error instead of discarding it, so that a refused registration — M-A19's messages included — shows in the container log; validate `-s` in the client (issue 5).
+
+**5. `send` accepts a mode of the wrong level (secondary).** The signal handler writes any value into `mode`. `./send 5545 98` moves the low-level port to an AES-256 backend and reproduces exactly the failure M-A18 removed. `synthesize` never does this (§8), so the normal flow is safe; the handler could refuse a mode whose level does not match its port, which needs the port's level in a global, since `port` is local to `createserver`.
+
+**6. Decrypted data is written before the tag is checked (secondary).** The server decrypts chunk by chunk and writes each one with `fwrite` as it goes; the tag is verified only in `dec_final`, at the end. On a mismatch it prints `TAG MISMATCH` and keeps the file, and the client is not told. With the level right (M-A18) the tag verifies and the file is correct, so this does not affect normal operation. It matters as soon as the prototype is presented as protecting integrity: an AEAD should never release unauthenticated plaintext. Writing to a temporary name and renaming only after a successful `dec_final`, or deleting the file on a mismatch, would close it.
+
+**7. Cross-build path on WSL2 not re-run since M-A16.** The QEMU column of §7 predates M-A16 and M-A18. The cross-build now needs `DOCKER_DEFAULT_PLATFORM=linux/arm64` (§6a), which has not been exercised yet.
 
 ---
 
@@ -588,27 +740,33 @@ Oldest first. `git log --oneline --graph al3monni-test-arm` is the authoritative
 | `fec03c9` | untrack the files registration regenerates (`wrapper.c`, `source.c`, `test.c`, `db.yaml`) and the leftovers that were never part of the project; drop the dead `profile.c` | — |
 | `baf99d5` | untrack `f*/Makefile_new`, which `gen.c` rewrites from `f*/Makefile` at every registration | — |
 | `13dd6af` | f7/f8 build on both architectures again; `ARG BASE` so the image also builds on x86-64 | M-A15 |
+| `6feb0da` | LOGBOOK: dual-architecture backends and x86-64 status | — |
+| `177bfef` | base image chosen from `TARGETARCH`; compose platform pin removed | M-A16 |
+| `f44d204` | `rfile` restored | M-A17 |
+| `a7fc710` | `start.sh` creates `Downloads/` before starting the server | M-A17 |
+| `eb16eb4` | each port starts on a backend of its own security level | M-A18 |
+| `07ac3df` | x86-64 profiling fails instead of hanging or registering zeros | M-A19 |
 
-The ARM work falls into four phases: **make it build** (`9207e41` … `c992b51`), **make it register and run correctly** (`af69ca9` … `9a902ab`), **move it onto the board's own userspace** (`e5edc89` … `ad1385f`), and **clean up and correct the base** (`dc78a00` … `66baa82`).
+The ARM work falls into four phases: **make it build** (`9207e41` … `c992b51`), **make it register and run correctly** (`af69ca9` … `9a902ab`), **move it onto the board's own userspace** (`e5edc89` … `ad1385f`), and **clean up and correct the base** (`dc78a00` … `66baa82`). A fifth, **measure and validate on both architectures** (`7debc15` … `07ac3df`), brought the INA260 energy path and the first bare-metal x86-64 validation of the current tree.
 
 ---
 
 ## 11. Base image [hw]
 
-The container is layered on **[`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu)** — a snapshot of the board's own root filesystem, published to Docker Hub. `linux/arm64/v8`, ~2 GB compressed.
+On aarch64 the container is layered on **[`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu)** — a snapshot of the board's own root filesystem, published to Docker Hub. `linux/arm64/v8`, ~2 GB compressed.
+
+The image is arm64-only, so it cannot serve an x86-64 build. Since M-A16 the base is chosen from the build architecture, with no argument to pass:
 
 ```dockerfile
-ARG BASE=al3monni/kria-ubuntu:22.04.5
-FROM ${BASE} AS build-env
+ARG TARGETARCH
+FROM al3monni/kria-ubuntu:22.04.5 AS base-arm64
+FROM ubuntu:22.04 AS base-amd64
+FROM base-${TARGETARCH} AS build-env
 ```
 
-The image is arm64-only, so on an x86-64 host every `RUN` fails with `exec /bin/sh: exec format error` before it runs anything. The base is therefore a build argument: the default is the board image, and an x86-64 build overrides it.
+On x86-64 the base is stock `ubuntu:22.04`: the same release as the snapshot, so the toolchain and OpenSSL match on both architectures, without the board tooling, which has no use there.
 
-```bash
-docker compose -f compose-server.yml build --build-arg BASE=ubuntu:22.04
-```
-
-### Why not stock `ubuntu:22.04`
+### Why not stock `ubuntu:22.04` on the board
 
 Same distribution, different userspace. AMD's Ubuntu 22.04 IoT image for Kria ships board-specific tooling — `xmutil` and the platform-statistics utilities among them — that the power-measurement work in §9 will need and that vanilla Ubuntu does not carry. Building on a snapshot of the board itself also decouples the container from whatever happens to be installed on the board at build time, so the toolchain survives a reflash.
 
