@@ -5,7 +5,6 @@
 #include<unistd.h>
 #include <sys/stat.h>    
 #include <stdbool.h>  
-#include <sys/types.h>
 #include <dirent.h>
 
 char* t2s(char *in){
@@ -91,7 +90,7 @@ int main(int argc, char **argv){
     char str[1024], df[1204],tf[1024],pf[1024],fn[1024],com1[8192],com2[8192] ,app[1024],app1[1024],string[1024],obj[1024],te[2048] ;
     int  slevel,rt;
     char *tmp,*tmp1;
-    int opt, i  ;
+    int opt;
      bool rval;
  while((opt = getopt(argc, argv, "c:")) != -1)  
     {  
@@ -125,12 +124,12 @@ int main(int argc, char **argv){
       tmp1=trim(extract(tmp)); 
  
        
-      if(strncmp((tmp),"Security_level",14)==0) {slevel=atoi(tmp1); }//printf("slevel=%d\n",slevel);}
+      if(strncmp((tmp),"Security_level",14)==0) {slevel=atoi(tmp1);}
       if(strncmp((tmp),"Makefile_Path",13)==0)  {strcpy(df,tmp1); printf("%s\n",df);}
-      if(strncmp((tmp),"Toplevel_file_PATH",18)==0) {strcpy(tf,tmp1);}// printf("%s\n",tf); }  
-      if(strncmp((tmp),"Toplevel_file",13)==0)      {strcpy(pf,tmp1);}// printf("%s\n",pf);}
-      if(strncmp((tmp),"Function_name",13)==0)      {strcpy(fn,tmp1);}// printf("%s\n",fn);}
-      if(strncmp((tmp),"Object_name",11)==0)        {strcpy(obj,tmp1);}//printf("%s\n",obj); }
+      if(strncmp((tmp),"Toplevel_file_PATH",18)==0) {strcpy(tf,tmp1);}
+      if(strncmp((tmp),"Toplevel_file",13)==0)      {strcpy(pf,tmp1);}
+      if(strncmp((tmp),"Function_name",13)==0)      {strcpy(fn,tmp1);}
+      if(strncmp((tmp),"Object_name",11)==0)        {strcpy(obj,tmp1);}
  
    }
      fclose(f); 
@@ -142,7 +141,6 @@ int main(int argc, char **argv){
   sprintf(app1,"test%d.c",slevel);  
   FILE *h=fopen(app1,"wb");  
   sprintf(com1,"./generate -s %d -p %s -t %s -f %s -n %s -b %s",slevel, df,tf,pf,fn,obj);  
-  //puts(com1);
   
   // check if makefile exists
    strcpy(com2, df);
@@ -222,8 +220,6 @@ int main(int argc, char **argv){
    sprintf(com2,"rm -rf %s/*.o",df);
    system(com2);
    
-   ///
-
    if(rval==0)
    {  system("gcc -o generate gen.c");
       system(com1);

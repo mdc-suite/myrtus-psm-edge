@@ -1,6 +1,4 @@
 #include<stdio.h>
-#include<string.h>
-#include <sys/stat.h>
 #include <dirent.h>
 #include <unistd.h>
 #include<stdlib.h>
@@ -22,8 +20,7 @@ xis_dir (const char *d)
 
     return 1;
 }
-void main(){
-
+int main(void){
 
 FILE *f;
 f=fopen("header.h","wb");

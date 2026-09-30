@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/stat.h> // stat
@@ -78,7 +77,6 @@ int main(int argc, char **argv)
     strcat(com1, tf);
     printf("2) ");
     puts(com1);
-    //if(system(com1))
     if (!file_exists(com1)) {
         fprintf(stderr, "Toplevel file does not exist!\n");
         return 2;
@@ -100,28 +98,15 @@ int main(int argc, char **argv)
     }
 
     if (f != NULL) {
-        // Read each line from the file and store it in the
-        // 'line' buffer.
         while (fgets(str, sizeof(str), f)) {
-            // Print each line to the standard output.
-
             if (!strncmp(str, "///", 3) && str[3] - '0' == slevel) {
                 h = atoi(str + 5);
                 h++;
-                //sprintf(tmp,"%d",++h);
-                //str[6]=0;
-                //strcat(str,tmp);
-                //fprintf(f1,"%s", str);
-
             } else if (!strncmp(str, "//e", 3)) {
-                //fprintf(f1,"//e\nvoid enc_s%02d_n%02d (unsigned char *, unsigned char *, unsigned char *); \n//\n", slevel,h);
                 sprintf(app, "enc_s%02d_n%02d", slevel, h);
 
-                //preprocess file to source
-
+                // preprocess the toplevel file to source.c, renaming the function
                 sprintf(string, "#define %s enc_s%02d_n%02d ", fn, slevel, h);
-                //strcat(string, fn);
-
                 fprintf(f2, "%s\n", string);
                 sprintf(string, "#include \"%s/%s\"", pf, tf);
 
@@ -136,7 +121,7 @@ int main(int argc, char **argv)
                 strcat(com1, tf);
                 strcat(com1, "/");
                 strcat(com1, "source.c");
-                strcat(com1, "/g\' "); //strcat(com1,df);
+                strcat(com1, "/g\' ");
                 strcat(com1, df);
                 strcat(com1, "/Makefile");
                 strcat(com1, "| tee ");
@@ -145,32 +130,22 @@ int main(int argc, char **argv)
                 puts(com1);
                 system(com1);
             }
-            //else
-            //fprintf(f1,"%s", str);
         }
-
-        // Close the file stream once all lines have been
-        // read.
         fclose(f);
-        // fclose(f1);
     } else {
-        // Print an error message to the standard error
-        // stream if the file cannot be opened.
         fprintf(stderr, "Unable to open file!\n");
     }
 
-    //make objfile
-
+    // make objfile
     sprintf(com1, "make %s -C %s -f Makefile_new", obj, df);
     system(com1);
 
-    //move objfile to libfolder under a different name
+    // move objfile to libfolder under a different name
     sprintf(com1, "cp %s/%s %s/%s.o", df, obj, libf, app);
     puts(com1);
     system(com1);
 
-    //compile profiler with objectfile
-
+    // compile profiler with objectfile
     sprintf(com1, "gcc -o internalprofile internalprofile.c %s/%s.o -ldl -rdynamic", libf, app);
     printf("profile command : ");
     puts(com1);
@@ -193,13 +168,8 @@ int main(int argc, char **argv)
     rt = system(com1);
 
     if (!rt) {
-
         if (f3 != NULL) {
-            // Read each line from the file and store it in the
-            // 'line' buffer.
             while (fgets(str, sizeof(str), f3)) {
-                // Print each line to the standard output.
-
                 if (!strncmp(str, "///", 3) && str[3] - '0' == slevel) {
                     h = atoi(str + 5);
                     sprintf(tmp, "%d", ++h);
@@ -216,9 +186,6 @@ int main(int argc, char **argv)
                 } else
                     fprintf(f1, "%s", str);
             }
-
-            // Close the file stream once all lines have been
-            // read.
             fclose(f3);
             fclose(f1);
         }
@@ -235,7 +202,7 @@ int main(int argc, char **argv)
         sprintf(com1, "rm -f %s/%s.o", libf, app);
         system(com1);
     }
-    //al3monni mod end
+    // al3monni mod end
 
     return 0;
 }

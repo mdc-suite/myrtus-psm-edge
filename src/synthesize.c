@@ -1,21 +1,8 @@
 #include<stdio.h>
 #include<string.h>
-#include<time.h>
 #include<stdlib.h>
 #include<unistd.h>
-#include <sys/stat.h>   // stat
-#include <stdbool.h> 
 #include <math.h> 
-#define fbits(y)  ((y) & 0xc0)>>6
-#define sbits(y)  ((y) & 0x30)>>4
-#define ibits(y)  ((y) & 0x0f) 
-#define fetch(mode)      slevel= sbits(mode);   num=ibits(mode); \
-                         sprintf(buf,"enc_s%02d_n%02d",slevel,num);    \
-                         function op = (function) dlsym(cx->handle, buf);  \
-                         if (op == NULL) {                             \
-                                           fprintf(stderr, "%s\n", dlerror());\
-                                          return -1;\
-                         }
 
 enum Type {
   SOFTWARE,
@@ -76,7 +63,6 @@ enum Type argex(char *in)
 
 int main(int argc, char **argv)
 {  
-   int h  ;
    int opt ;
    entry *Dict;
    base bp;
@@ -84,7 +70,7 @@ int main(int argc, char **argv)
    char string[1024],scode[1024];
    char df[1024],*tmp,*tmp1;
    float maxt,mint,maxe,mine,mind;
-   int i=-1,j,k,count=0,id,imp,code;
+   int i=-1,j,count=0,id,imp,code;
    u8 tp,en,slevel,plot; 
    FILE *g=fopen("db.yaml","rb"); 
    FILE *f=fopen("db.yaml","rb");
@@ -102,7 +88,6 @@ int main(int argc, char **argv)
    }
  
 
-   //printf("total entry =%d\n",count);
    Dict = (entry *) malloc(count*sizeof(entry));
    dist = (float *) malloc(count*sizeof(float));  
    if(f!=NULL){
@@ -136,27 +121,22 @@ int main(int argc, char **argv)
               
             case 's':
                 slevel = atoi(optarg);
-                //printf("security level: %d\n", slevel );  
                 break;
             case 'f':  
                 strcpy(df,optarg);
                 fn =argex(df);
-                //printf("Function %d\n", fn);  
                 break;  
                 
             case 't':  
                 tp = atoi(optarg);
-                //printf("Throughput %d\n", tp);  
                 break;      
                 
             case 'e':  
                 en = atoi(optarg);
-                //printf("Energy %d\n", en);  
                 break; 
                 
              case 'p':  
                 plot=1;
-                //printf("Plot %d\n", plot);  
                 break; 
                
        
@@ -181,7 +161,6 @@ int main(int argc, char **argv)
   bp.time =  (tp==0) * mint + (tp==1) * ((mint+maxt)/2.0 ) + (tp==2)* maxt;
   bp.energy =  (en==0) * mine + (en==1) * ((mine+maxe)/2.0 ) + (en==2)* maxe;
 
-    //printf("maxe=%f mine=%f maxt=%f mint=%f\n",  maxe,mine,maxt,mint);  
   for(j=0;j<count;j++)
   {
      if(Dict[j].ifunc == fn && Dict[j].slevel == slevel )
@@ -195,7 +174,6 @@ int main(int argc, char **argv)
 
   for(j=0;j<count;j++)
      if(mind> dist[j]) {mind= dist[j];id=j;} 
-  //printf("Solution = %d\n",id);
   puts(Dict[id].name); 
 
   imp=atoi(Dict[id].name+9);
