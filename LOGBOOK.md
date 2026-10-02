@@ -8,7 +8,7 @@ This logbook records the modifications that took **spdocker** from an x86-only p
 | **Upstream** | https://github.com/subhadeep-banik/spdocker, by Subhadeep Banik |
 | **Target hardware** | Kria KV260 — Zynq UltraScale+ MPSoC, 4× Cortex-A53, aarch64, Ubuntu 22.04 IoT |
 | **Hosts** | the board itself (native aarch64 build) · bare-metal x86-64 Linux (native amd64 build) |
-| **Base image** | [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu) on aarch64, `ubuntu:22.04` on x86-64, chosen automatically (§10) |
+| **Base image** | [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu) on aarch64, `ubuntu:22.04` on x86-64, chosen automatically (§8) |
 | **Status** | ✅ Validated on both architectures at `c0c0065`: eight backends registered and measured, byte-identical transfers on both security levels for files of every size, runtime switch working |
 
 ### How to read the modifications
@@ -29,18 +29,16 @@ Architecture tags: `arm` (aarch64 only), `x86` (x86-64 only), `both`.
 2. [What was broken](#2-what-was-broken)
 3. [Baseline: making upstream run at all](#3-baseline-making-upstream-run-at-all) — M1 … M3
 4. [Port modifications](#4-port-modifications) — M4 … M20
-5. [Verification](#5-verification)
-6. [Selection mechanism and implementation map](#6-selection-mechanism-and-implementation-map)
-7. [Energy measurement](#7-energy-measurement)
-8. [Status: resolved and open points](#8-status-resolved-and-open-points)
-9. [Commit map](#9-commit-map)
-10. [Base image](#10-base-image)
+5. [Energy measurement](#5-energy-measurement)
+6. [Status: resolved and open points](#6-status-resolved-and-open-points)
+7. [Commit map](#7-commit-map)
+8. [Base image](#8-base-image)
 
 ---
 
 ## 1. What this project is
 
-A TLS client/server that ships **eight interchangeable AES implementations**. At runtime the server selects one, loads it from a shared library via `dlopen`/`dlsym`, and uses it for the authenticated encryption of file transfers. The selection is driven by measured time and energy, against a policy given to `synthesize` (§6).
+A TLS client/server that ships **eight interchangeable AES implementations**. At runtime the server selects one, loads it from a shared library via `dlopen`/`dlsym`, and uses it for the authenticated encryption of file transfers. The selection is driven by measured time and energy, against a policy given to `synthesize` (README, *How it works*).
 
 As the **Privacy and Security Manager** of the MYRTUS edge layer, the component demonstrates *crypto-agility*: the cipher implementation behind a secure channel is not fixed at compile time but chosen at runtime, so the security/performance/energy trade-off can be renegotiated as conditions on the node change.
 
@@ -54,7 +52,7 @@ reset  →  register ×8  →  gcc -shared ./LIB/*.o -o ./LIB/lib_enc.so  →  .
 - `register -c ./fN/config.txt` compiles backend `fN`, runs a known-answer test (KAT), measures its time and energy, gives it a unique symbol name and drops `enc_sXX_nYY.o` into `LIB/`
 - `server` opens `./LIB/lib_enc.so` and resolves `enc_s%02d_n%02d` according to the mode byte
 
-The **registration order is the numbering**: it decides which `fN` a given mode byte selects. The client does not depend on it, since it never loads `lib_enc.so`; everything that names a backend by number does (§6).
+The **registration order is the numbering**: it decides which `fN` a given mode byte selects. The client does not depend on it, since it never loads `lib_enc.so`; everything that names a backend by number does (README, *How it works*, step 2).
 
 ---
 
@@ -121,7 +119,7 @@ Grouped by theme; within each theme the most important come first. Paths are the
 > [!IMPORTANT]
 > The same `docker compose … up --build` works on the board and on x86-64, with no argument. The Dockerfile picks the base image from the architecture it is building for, and compose builds for the host.
 
-**`Dockerfile`.** The base image on the board is a snapshot of the board's own root filesystem (§10), which exists only for arm64: on x86-64 every `RUN` would fail with `exec format error`. The base is therefore chosen from `TARGETARCH`, which BuildKit sets to the architecture being built, with one stage per architecture:
+**`Dockerfile`.** The base image on the board is a snapshot of the board's own root filesystem (§8), which exists only for arm64: on x86-64 every `RUN` would fail with `exec format error`. The base is therefore chosen from `TARGETARCH`, which BuildKit sets to the architecture being built, with one stage per architecture:
 
 ```dockerfile
 ARG TARGETARCH
@@ -151,7 +149,7 @@ likwid's build ties compiler and architecture together: its default `COMPILER = 
 | `ACCESSMODE` | `perf_event` | the Linux interface to the ARM performance counters; the default access daemon is x86-only |
 | `BUILDDAEMON`, `BUILDFREQ` | `false` | the MSR access daemon and the frequency daemon, which the ARM build does not need |
 
-On ARM likwid can read the performance counters (cycles, instructions, caches) but no energy: that is why the board measures energy through the INA260 (M12, §7).
+On ARM likwid can read the performance counters (cycles, instructions, caches) but no energy: that is why the board measures energy through the INA260 (M12, §5).
 
 <details>
 <summary>🟢 <b>M6 · Build likwid before copying the sources</b> — <code>both</code> · <code>Dockerfile</code> · <code>d01abde</code></summary>
@@ -179,7 +177,7 @@ Since M12 the board measures energy through the INA260, and `profile01.c` calls 
 #### 🟡 M8 · A failed measurement no longer destroys the registration state
 `both` · `src/gen.c` · `af69ca9`, `7debc15`
 
-`header.h` is the registration manifest: for each security level it holds the number of registered backends, and for each backend its prototype. `gen.c` writes the updated version to `header1.h` and then replaces the old one. Upstream bumped the counter only if the measurement succeeded (`if (!rt)`), but ran `rm header.h; mv header1.h header.h` **unconditionally**. A failed measurement therefore replaced the manifest with an incomplete file and wiped the registration state. This surfaced on aarch64, where the first measurements could not work at all (§7).
+`header.h` is the registration manifest: for each security level it holds the number of registered backends, and for each backend its prototype. `gen.c` writes the updated version to `header1.h` and then replaces the old one. Upstream bumped the counter only if the measurement succeeded (`if (!rt)`), but ran `rm header.h; mv header1.h header.h` **unconditionally**. A failed measurement therefore replaced the manifest with an incomplete file and wiped the registration state. This surfaced on aarch64, where the first measurements could not work at all (§5).
 
 Now the replacement happens only when the measurement succeeds. On failure `gen.c` discards `header1.h`, removes the half-registered object from `LIB/` and says so:
 
@@ -228,7 +226,7 @@ The round keys therefore shift by one position relative to the x86 code. A versi
 
 **The silent clash that followed.** With the rewrite, f7 and f8 passed their tests in isolation but vanished from a full registration: `register` exited with 0, yet `LIB/` held six objects instead of eight. The C key expansion had brought in two global tables, `sbox` and `Rcon`, with the same names as tables already registered by f1 and f4. `register` checks for clashes with `nm --defined-only`, which lists local symbols too (`static` does not hide them), and on a clash it skips the backend without an error. The tables were renamed per backend (`f7_sbox`, `f7_rcon`, `f8_sbox`, `f8_rcon`).
 
-The lesson applies to the whole pipeline: a zero exit status and a passing test are not enough, and the only reliable check is the number of objects in `LIB/` (§5).
+The lesson applies to the whole pipeline: a zero exit status and a passing test are not enough, and the only reliable check is the number of objects in `LIB/` (README, *Tests*).
 
 **Validated:** both known-answer tests pass bit-identical on the Cortex-A53; a full registration produces eight objects, with counters `///1-04` and `///2-04`.
 
@@ -283,7 +281,7 @@ endif
 - *Estimator:* each window's level is the median of its 250 ms block means. A burst from another process spoils a few blocks without moving the median, and averaging within blocks keeps a resolution well below the sensor's 10 mW step.
 - *Quality gate:* a measurement is accepted only if the two baselines, and the two halves of the run, agree within 15 mW; otherwise it is repeated, up to three times. Every attempt is logged in `power.csv`, next to `db.yaml`.
 
-**Validation.** Before the protocol was used for selection, an 8-hour unattended campaign (283 measurements per backend) checked that its figures can be trusted: one measurement varies by 1–3% on energy, the differences between backends are real down to about 1%, temperature plays no role, and figures taken during a normal registration match isolated ones within 2.3%. The limits this leaves are discussed in §7.
+**Validation.** Before the protocol was used for selection, an 8-hour unattended campaign (283 measurements per backend) checked that its figures can be trusted: one measurement varies by 1–3% on energy, the differences between backends are real down to about 1%, temperature plays no role, and figures taken during a normal registration match isolated ones within 2.3%. The limits this leaves are discussed in §5.
 
 > [!WARNING]
 > **Do not poll the container while it measures.** A harness running `docker exec` every 5 s biased every measurement about 30% low: bursts in the baselines pass the gate and inflate the subtracted idle, while bursts in the run are rejected. `tools/bench_ina260.sh` waits by following the container log instead.
@@ -328,13 +326,13 @@ mode = (port == 5544) ? 0x62 : 0x52;   /* enc_s02_n02 / enc_s01_n02 */
 
 Port 5544 keeps upstream's default; 5545 starts on its AES-128 counterpart, `enc_s01_n02` (f2). `send` and `synthesize` work as before.
 
-**Validated:** both levels byte-identical on both architectures without any `send`; the log reads `Starting with enc_s02_n02` on 5544 and `Starting with enc_s01_n02` on 5545. Two related upstream weaknesses remain open (§8).
+**Validated:** both levels byte-identical on both architectures without any `send`; the log reads `Starting with enc_s02_n02` on 5544 and `Starting with enc_s01_n02` on 5545. Two related upstream weaknesses remain open (§6).
 
 <details>
 <summary>🟢 <b>M15 · Restore the round-trip input and create <code>Downloads/</code> at start</b> — <code>both</code> · <code>test/rfile</code>, <code>src/start.sh</code> · <code>f44d204</code>, <code>a7fc710</code></summary>
 
 A clean-up of leftovers (`fec03c9`) also removed two things the runtime needs:
-- **`rfile`**, the 10000-byte input of the round-trip test (§5), restored from history;
+- **`rfile`**, the 10000-byte input of the round-trip test (README, *Tests*), restored from history;
 - **`Downloads/`**, where the server saves every received file. The server never creates it, and the directory existed only because a file inside it was tracked; without it every transfer was lost silently. `start.sh` now runs `mkdir -p Downloads` before starting the server.
 
 </details>
@@ -397,131 +395,7 @@ The client sends the ciphertext in 1024-byte records, followed by the 16-byte ta
 
 ---
 
-## 5. Verification
-
-Run these against a container that has finished its start pipeline. `test/test.sh` runs them on the target and reports, for each, the command, the expected and the obtained result (README, *Tests*): with no option the build checks and the round trip, with `-rapid` the build checks only, with `-all` also the runtime switch and the file sizes of M17 and M18. The commands below are the same checks by hand.
-
-> [!NOTE]
-> Compose calls the service `ssl-server`, and the container it creates is `Test-server`. `docker compose` subcommands take the service name; `docker exec` and `docker logs` take the container name. Mixing them up gives a "no such service/container" error.
-
-```bash
-# the binaries match the host
-docker exec Test-server readelf -h /app/server | grep Machine     # AArch64 / Advanced Micro Devices X86-64
-
-# 8 objects and the shared library
-docker exec Test-server ls -la /app/LIB
-
-# 8 exported symbols, all of type T
-docker exec Test-server sh -c 'nm -D /app/LIB/lib_enc.so | grep enc_s'
-
-# 4 backends per level
-docker exec Test-server sh -c 'grep "///" /app/header.h'          # ///1-04  ///2-04
-
-# 8 measured backends, none with zero energy
-docker exec Test-server sh -c 'grep -c "^name" /app/db.yaml; grep -c "energy: 0.000000" /app/db.yaml'   # 8, 0
-
-# the server is listening
-docker exec Test-server sh -c 'lsof -i -P -n | grep LISTEN'       # *:5544, *:5545
-```
-
-### End-to-end round trip
-
-The test that proves correctness is a file transfer compared byte for byte, **on both security levels**. `rfile` (10000 bytes, `test/rfile` in the repository) exists for this purpose.
-
-| Level | Client | Port | Cipher |
-|---|---|---|---|
-| high | `-s 1` | 5544 | AES-256-GCM |
-| low | `-s 0` | 5545 | AES-128-GCM |
-
-```bash
-for p in "1 5544" "0 5545"; do set -- $p
-  docker exec Test-server sh -c "cd /app && rm -f Downloads/*; ./client -s $1 -i 127.0.0.1:$2 -f rfile 2>&1 | tail -1; sleep 3; for f in Downloads/*; do cmp rfile \$f && echo IDENTICAL -s $1 port $2; done"
-done
-docker logs Test-server 2>&1 | grep -E "Starting with|MISMATCH"
-```
-
-Expected, for each level: `Entire File Sent 10016 bytes` (10000 bytes of payload plus the 16-byte authentication tag) and `IDENTICAL`; in the log, `Starting with enc_s02_n02` and `Starting with enc_s01_n02`, and no `TAG MISMATCH`.
-
-Three things to know about this test:
-- **`-s` accepts only `0` and `1`.** Any other value leaves the client without a cipher, and the server reports `TAG MISMATCH`.
-- **Run the transfers one at a time.** The server saves each file as `Downloads/filename-ekm<N>`, with `<N>` drawn from `rand()`. The two server processes seed it in the same second and draw the same sequence of names, so simultaneous transfers on the two ports can end up in the same file.
-- **Only `cmp` counts.** `Entire File Sent` says nothing about what the server did with the data, the server's own "Received N bytes" line leaves out the last partial chunk, and the server keeps a file even when its tag does not verify (§8).
-
-### Reference results
-
-| Check | Expected | Kria KV260 | x86-64 (bare metal) |
-|---|---|---|---|
-| OpenSSL banner | `platform: debian-arm64` / `debian-amd64` | ✅ | ✅ |
-| `LIB/` | 8 × `enc_s0*.o` and `lib_enc.so` | ✅ | ✅ |
-| `nm -D` | `enc_s01_n01` … `enc_s02_n04`, all `T` | ✅ | ✅ |
-| `header.h` | `///1-04`, `///2-04` | ✅ | ✅ |
-| Registration f1–f8 | no symbol clash, no KAT failure | ✅ | ✅ |
-| `db.yaml` | 8 entries, no zero energy | ✅ INA260 | ✅ RAPL |
-| Round trip, high (`-s 1`, 5544) | `10016 bytes`, `cmp` identical | ✅ | ✅ |
-| Round trip, low (`-s 0`, 5545) | `10016 bytes`, `cmp` identical | ✅ since M14 | ✅ since M14 |
-| Runtime switch (`synthesize -s 1 -t 0 -e 0`, then a transfer on 5545) | `Switching to enc_s01_n04`, `Starting with enc_s01_n04`, `cmp` identical | ✅ | ✅ |
-| File sizes (18 sizes from 0 B to 1 MiB, both levels, backends and OpenSSL GCM) | 72 transfers identical, no `TAG MISMATCH` | ✅ since M17, M18 | ✅ since M17, M18 |
-| AES instructions in `/proc/cpuinfo` | `aes pmull sha1 sha2` | ✅ | n/a |
-
-The x86-64 column was validated on an AMD Ryzen 5 3500U (Zen+) with the prerequisites of the README (*Build and run*, step 1). The commands of the runtime-switch test are in the README, under *Tests*.
-
----
-
-## 6. Selection mechanism and implementation map
-
-One byte, the **mode**, encodes the choice: two bits of function class, two of security level, four of implementation index. `synthesize` sets the class (`01`, encryption); the server reads only the level and the index (`encrypt02.c`):
-
-```c
-#define sbits(y)  (((y) & 0x30) >> 4)   // security level
-#define ibits(y)   ((y) & 0x0f)         // implementation index
-// fetch(mode): slevel = sbits(mode); num = ibits(mode);
-//             sprintf(buf,"enc_s%02d_n%02d",slevel,num);
-//             op = (function) dlsym(cx->handle, buf);
-```
-
-For example 98 = `0x62` = `01 10 0010` → encryption, level 2, index 2 → **`enc_s02_n02`** (f5). Each port starts on a backend of its own level (M14): 5544 on `0x62` (`enc_s02_n02`, f5), 5545 on `0x52` (`enc_s01_n02`, f2).
-
-### Algorithm and implementation
-
-Two choices are made in two different places, and keeping them apart explains most of what the component does.
-
-- **The security level is the algorithm**, fixed per port and chosen by the client with `-s`: `1` connects to 5544 and encrypts with AES-256-GCM, `0` connects to 5545 and encrypts with AES-128-GCM (`cltest.c`). The client always uses OpenSSL and knows nothing about the mode.
-- **The mode picks the implementation**, on the server only. Every backend computes one AES block (a key and 16 bytes in, 16 bytes out); the GCM mode around it (counter, GHASH, tag) is written once in `encrypt02.c` and calls the backend block by block. With `mode == 0` the server uses OpenSSL's GCM instead (M18).
-
-Because all the backends of a level compute the same function, any of them works with the client: changing implementation is invisible on the wire, changing level is not. That is what makes the switch safe at runtime: `dec_update` looks up the backend from the mode for every 1024-byte chunk, so a new mode applies even in the middle of a transfer. Key and IV come from the TLS session on both sides (`SSL_export_keying_material`, 64 bytes: key 0–31, IV 32–47); nothing about the cipher is negotiated beyond the TLS handshake itself.
-
-### Choosing and applying a backend
-
-`synthesize -f e -s <level> -t <0|1|2> -e <0|1|2>` reads `db.yaml`, keeps the backends of that level, normalises their time and energy between minimum and maximum, and picks the one closest to the requested point (0 = minimum, 1 = middle, 2 = maximum). It then calls `./send <5544 + 2 − level> <64 + 16·level + index>`. `send` finds the process listening on that port with `lsof` and sends it `SIGUSR1` carrying the value, which the signal handler writes into `mode`.
-
-Port and level come from the same number, so `synthesize` never selects across levels; a `send` issued by hand can (§8). Nothing runs `synthesize` automatically: today the selection is a manual step.
-
-With real measurements in `db.yaml` (M12), all four backends of each level are reachable: `n04` at `-t 0 -e 0` and `n03` at `-t 2 -e 2`. The off-diagonal policies ("fast but expensive") are physically contradictory on the board, where energy is time multiplied by a nearly constant power; `synthesize` then returns the nearest point, `n01` or `n02`, which sit within ~5% of each other.
-
-### Implementation map
-
-The backend directories are under `backends/`.
-
-| Dir | Function | Build flags (aarch64 / x86-64) | Symbol | Notes |
-|---|---|---|---|---|
-| f1 | `aes128` | plain C | `enc_s01_n01` | reference AES-128 |
-| f2 | `AES_enc` | plain C | `enc_s01_n02` | initial backend of port 5545 (M14) |
-| f3 | `aes_ecb_encrypt` | `-DUNROLL_TRANSPOSE` | `enc_s01_n03` | bitsliced, from [bitsliced-aes](https://github.com/conorpp/bitsliced-aes) |
-| f7 | `aes128` | `-march=armv8-a+crypto` / `-maes -msse4.1` | `enc_s01_n04` | AES instructions, both sets in one source (M10, M11) |
-| f4 | `aes256` | plain C | `enc_s02_n01` | reference AES-256 |
-| f5 | `AES256_enc` | plain C | `enc_s02_n02` | upstream's default, initial backend of port 5544 |
-| f6 | `aes256_ecb_encrypt` | `-DUNROLL_TRANSPOSE` | `enc_s02_n03` | bitsliced, adapted to AES-256 |
-| f8 | `aes256` | `-march=armv8-a+crypto` / `-maes -msse4.1` | `enc_s02_n04` | AES instructions, both sets in one source (M10, M11) |
-
-Registration order **is** the numbering, so this table is a contract, not a description. The client does not depend on it; what does is everything that names a backend by number: the initial modes in `server_f.c` (M14), any value passed to `send` by hand, and this table. Reordering the `register` calls in `start.sh` keeps every transfer correct, because the level does not change, but silently changes which implementation a given mode selects.
-
-Eight implementations whose internal function names were originally identical can share one library because `gen.c` wraps each of them: `#define <fn> enc_sXX_nYY`, `#include` of the source, `gcc -E -P` into a fully preprocessed `source.c`, and the renamed object goes into `LIB/`. Global tables survive preprocessing untouched, which is why f7 and f8 needed their own table names (M10).
-
-On the board, f7 and f8 are the two backends that use the A53's AES instructions; the other six are portable C. That split is exactly what the energy measurement (§7) makes visible.
-
----
-
-## 7. Energy measurement
+## 5. Energy measurement
 
 **The principle: every platform is measured with the finest instrument it offers.** This is a deliberate choice, not a compromise waiting for a fix. The two platforms offer different instruments, so they measure different quantities.
 
@@ -546,7 +420,25 @@ These follow from the choice and from the hardware; they are properties of the m
 
 ---
 
-## 8. Status: resolved and open points
+## 6. Status: resolved and open points
+
+### Validation
+
+| Check | Expected | Kria KV260 | x86-64 (bare metal) |
+|---|---|---|---|
+| OpenSSL banner | `platform: debian-arm64` / `debian-amd64` | ✅ | ✅ |
+| `LIB/` | 8 × `enc_s0*.o` and `lib_enc.so` | ✅ | ✅ |
+| `nm -D` | `enc_s01_n01` … `enc_s02_n04`, all `T` | ✅ | ✅ |
+| `header.h` | `///1-04`, `///2-04` | ✅ | ✅ |
+| Registration f1–f8 | no symbol clash, no KAT failure | ✅ | ✅ |
+| `db.yaml` | 8 entries, no zero energy | ✅ INA260 | ✅ RAPL |
+| Round trip, high (`-s 1`, 5544) | `10016 bytes`, `cmp` identical | ✅ | ✅ |
+| Round trip, low (`-s 0`, 5545) | `10016 bytes`, `cmp` identical | ✅ since M14 | ✅ since M14 |
+| Runtime switch (`synthesize -s 1 -t 0 -e 0`, then a transfer on 5545) | `Switching to enc_s01_n04`, `Starting with enc_s01_n04`, `cmp` identical | ✅ | ✅ |
+| File sizes (18 sizes from 0 B to 1 MiB, both levels, backends and OpenSSL GCM) | 72 transfers identical, no `TAG MISMATCH` | ✅ since M17, M18 | ✅ since M17, M18 |
+| AES instructions in `/proc/cpuinfo` | `aes pmull sha1 sha2` | ✅ | n/a |
+
+The checks are those of the README (*Build and run* and *Tests*) and, for the AES instructions, of the Kria guide (§9). The x86-64 column was validated on an AMD Ryzen 5 3500U (Zen+), set up as in the README (*Build and run*, step 1).
 
 ### Resolved by the port
 
@@ -570,14 +462,14 @@ All secondary: none affects normal operation.
 1. **Small upstream fixes.**
    - `register.c`: initialise `bool rval = 0;`; return a non-zero status when `collide()` refuses a backend, so a skipped backend is not reported as a success (M10); check that the `check%d.c` template exists *before* opening `test%d.c` for writing (§2a).
    - `start.sh`: keep the standard error of `register` instead of discarding it, so a refused registration, M13's messages included, reaches the container log.
-   - `cltest.c`: reject any `-s` other than `0` and `1` (§5).
-2. **`send` accepts a mode of the wrong level.** The signal handler writes any value into `mode`: `./send 5545 98` moves the low-level port to an AES-256 backend and reproduces exactly the failure M14 removed. `synthesize` never does this (§6). The handler could refuse a mode whose level does not match its port; that needs the port's level in a global, since `port` is local to `createserver`.
+   - `cltest.c`: reject any `-s` other than `0` and `1` (README, *Tests*).
+2. **`send` accepts a mode of the wrong level.** The signal handler writes any value into `mode`: `./send 5545 98` moves the low-level port to an AES-256 backend and reproduces exactly the failure M14 removed. `synthesize` never does this (README, *How it works*, step 5). The handler could refuse a mode whose level does not match its port; that needs the port's level in a global, since `port` is local to `createserver`.
 3. **Decrypted data is written before the tag is checked.** The server decrypts chunk by chunk and writes each one as it goes; the authentication tag is verified only at the end, in `dec_final` (by OpenSSL in mode 0). On a mismatch it prints `TAG MISMATCH`, keeps the file, and does not tell the client. With the right level (M14) the tag verifies and the file is correct, but an authenticated cipher should never release data it has not authenticated. Writing to a temporary name and renaming only after a successful `dec_final`, or deleting the file on a mismatch, would close it.
 4. **Test certificate.** `certs/certfile.crt` is self-signed and valid until 18 January 2027. The client does not verify it, so its expiry will not break transfers, but the client does not authenticate the server either. The fix is a certificate the client actually checks; renewing this one only moves the date.
 
 ---
 
-## 9. Commit map
+## 7. Commit map
 
 Each modification with the commits that implement it. `git log --oneline main` gives the full chronological history.
 
@@ -604,11 +496,11 @@ Each modification with the commits that implement it. `git log --oneline main` g
 | 🟡 M18 · OpenSSL path (mode 0) | `7440efc` |
 | 🟢 M19 · likwid on x86-64 only | `52c6544` |
 | 🟢 M20 · Stop at once (`init: true`) | `6890ce2` |
-| Base image snapshot (§10) | `66baa82` |
+| Base image snapshot (§8) | `66baa82` |
 
 ---
 
-## 10. Base image
+## 8. Base image
 
 On aarch64 the container is built on **[`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu)**, a snapshot of the board's own root filesystem published on Docker Hub (`linux/arm64/v8`, ~2 GB compressed). On x86-64 it is built on stock `ubuntu:22.04`, the same release. The Dockerfile chooses between them from the architecture being built (M4).
 

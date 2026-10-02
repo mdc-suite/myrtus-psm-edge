@@ -167,18 +167,28 @@ flowchart LR
 
 - **Known-answer test.** `register` fills a template (`check1.c` for AES-128, `check2.c` for AES-256) with a call to the backend, compiles it with the backend's object and runs it: the backend must encrypt a fixed plaintext under a fixed key into the expected ciphertext. This is what proves that a backend computes AES correctly.
 - **Symbol clash.** Every backend ends up in the same library, so `register` checks with `nm` that none of its symbols already exists in `LIB/`.
-- **Rename.** `gen.c` wraps the source with `#define <function> enc_sXX_nYY` and recompiles it: `XX` is the security level and `YY` the next free index for that level, read from `header.h`. The registration order therefore *is* the numbering.
+- **Rename.** `gen.c` renames the backend's AES function to `enc_sXX_nYY`: `XX` is the security level and `YY` the next free index for that level, read from `header.h`. The registration order therefore *is* the numbering.
 - **Measurement.** `profile01.c` measures the backend and appends its time and energy, per 50 000 encryptions, to `db.yaml`:
   - on **x86-64**, with `likwid-perfctr -g ENERGY` around 50 000 encryptions, reading the RAPL energy of the processor cores;
   - on the **board**, with the module's INA260 power monitor: 2 s of idle, 3 s of the backend looping, 2 s of idle again, and the energy above idle integrated over the run.
 - **Install.** The object stays in `LIB/` only if the measurement succeeds; then the counter in `header.h` is incremented and the backend's prototype added. On any failure `header.h` is left as it was.
 
-The result, for each level, is four backends numbered `n01` to `n04`:
+The result is eight backends, four per level. Their directories are under `backends/`:
 
-| Level | `n01` | `n02` | `n03` | `n04` |
+| Dir | Function | Build flags (aarch64 / x86-64) | Symbol | Implementation |
 |---|---|---|---|---|
-| 1 — AES-128 | f1, reference C | f2, alternative C | f3, bitsliced | f7, AES instructions |
-| 2 — AES-256 | f4, reference C | f5, alternative C | f6, bitsliced | f8, AES instructions |
+| f1 | `aes128` | plain C | `enc_s01_n01` | reference AES-128 |
+| f2 | `AES_enc` | plain C | `enc_s01_n02` | alternative C; initial backend of port 5545 |
+| f3 | `aes_ecb_encrypt` | `-DUNROLL_TRANSPOSE` | `enc_s01_n03` | bitsliced, from [bitsliced-aes](https://github.com/conorpp/bitsliced-aes) |
+| f7 | `aes128` | `-march=armv8-a+crypto` / `-maes -msse4.1` | `enc_s01_n04` | the processor's AES instructions, both sets in one source |
+| f4 | `aes256` | plain C | `enc_s02_n01` | reference AES-256 |
+| f5 | `AES256_enc` | plain C | `enc_s02_n02` | alternative C; upstream's default, initial backend of port 5544 |
+| f6 | `aes256_ecb_encrypt` | `-DUNROLL_TRANSPOSE` | `enc_s02_n03` | bitsliced, adapted to AES-256 |
+| f8 | `aes256` | `-march=armv8-a+crypto` / `-maes -msse4.1` | `enc_s02_n04` | the processor's AES instructions, both sets in one source |
+
+Because the registration order is the numbering, this table is a contract. The client does not depend on it; what does is everything that names a backend by number: the initial modes in `server_f.c`, any value passed to `send` by hand, and this table. Reordering the `register` calls in `start.sh` keeps every transfer correct, since the level does not change, but silently changes which implementation a given mode selects.
+
+Eight implementations whose function names were originally identical can share one library thanks to the rename. `gen.c` writes `#define <function> enc_sXX_nYY` followed by an `#include` of the source, expands it with `gcc -E -P` into a fully preprocessed `source.c`, and compiles that. Global tables survive the preprocessing with their names unchanged, which is why f7 and f8 give theirs names of their own (`LOGBOOK.md` M10).
 
 ### 3. The server
 
@@ -190,6 +200,17 @@ The server prints the OpenSSL banner and forks into two processes, one per secur
 | 5545 | low | AES-128-GCM | `enc_s01_n02` (f2) |
 
 Each process keeps the backend it uses in a single byte, the **mode**: two bits for the function, two for the security level, four for the implementation index. `0x62` = `01 10 0010` means encryption, level 2, index 2, i.e. `enc_s02_n02`.
+
+The server reads only the level and the index, and looks the backend up by name in `lib_enc.so` (`encrypt02.c`):
+
+```c
+#define sbits(y)  ((y) & 0x30)>>4    // security level
+#define ibits(y)  ((y) & 0x0f)       // implementation index
+// fetch(mode): sprintf(buf, "enc_s%02d_n%02d", sbits(mode), ibits(mode));
+//              op = (function) dlsym(cx->handle, buf);
+```
+
+The function bits are set by `synthesize` (`01`, encryption) and not otherwise used. Mode `0` is the exception: the server then decrypts with OpenSSL's own AES-GCM instead of a registered backend (`LOGBOOK.md` M18). Only a `./send <port> 0` issued by hand selects it.
 
 ### 4. A file transfer
 
@@ -205,7 +226,7 @@ sequenceDiagram
 ```
 
 1. The client (`./client -s <level> -i <address>:<port> -f <file>`) connects to the port of the chosen level: `-s 1` to 5544, `-s 0` to 5545.
-2. After the TLS 1.3 handshake, both sides call `SSL_export_keying_material` and obtain the same 64 bytes: the key and the IV of the file encryption. Nothing else about the cipher is negotiated.
+2. After the TLS 1.3 handshake, both sides call `SSL_export_keying_material` and obtain the same 64 bytes: the key of the file encryption in bytes 0–31 and its IV in bytes 32–47. Nothing else about the cipher is negotiated.
 3. The client encrypts the file with OpenSSL's AES-GCM (256-bit on 5544, 128-bit on 5545) and sends it in 1024-byte chunks, followed by the 16-byte authentication tag. It prints `Entire File Sent <n> bytes`.
 4. The server decrypts with its own GCM implementation (`encrypt02.c`), which calls the backend named by the mode for every AES block, verifies the tag at the end and saves the file as `Downloads/filename-ekm<N>`.
 
@@ -215,9 +236,11 @@ The client always uses OpenSSL and knows nothing about the mode. It does not nee
 
 This is the crypto-agility itself:
 
-1. `./synthesize -f e -s <level> -t <0|1|2> -e <0|1|2>` reads `db.yaml`, keeps the four backends of the level, and picks the one closest to the requested time and energy (0 = lowest, 1 = middle, 2 = highest).
-2. It calls `./send <port> <mode>`, which finds the server process listening on the port of that level and sends it the new mode with a `SIGUSR1` signal.
+1. `./synthesize -f e -s <level> -t <0|1|2> -e <0|1|2>` reads `db.yaml` and keeps the four backends of the level. It normalises their time and energy between the minimum and the maximum, and picks the backend closest to the requested point: 0 = lowest, 1 = middle, 2 = highest.
+2. It calls `./send <5544 + 2 − level> <64 + 16·level + index>`, for example `./send 5545 84` for `enc_s01_n04`. `send` finds the server process listening on that port with `lsof` and sends it the new mode with a `SIGUSR1` signal. Port and level come from the same number, so `synthesize` never moves a port to the other level; a `send` issued by hand can (*Known limitations*).
 3. The server's signal handler stores the new mode. The backend is looked up again for every 1024-byte chunk, so the switch applies from the next chunk, even in the middle of a transfer, and lasts until the container restarts.
+
+With measured figures in `db.yaml`, the corners of the policy reach every kind of backend: `-t 0 -e 0` selects `n04`, the AES instructions, and `-t 2 -e 2` selects `n03`, the bitsliced one. Mixed requests such as fast but expensive (`-t 0 -e 2`) contradict each other on the board, where energy is time multiplied by an almost constant power: `synthesize` then returns the nearest point, `n01` or `n02`, which are within about 5% of each other.
 
 Nothing runs `synthesize` automatically: today the selection is a manual step.
 
@@ -360,7 +383,7 @@ The new backend stays in use until the container restarts. To go back to the ini
 
 ## Known limitations
 
-**Energy is measured differently on the two platforms, on purpose.** Each platform is measured with the finest instrument it offers: RAPL's per-core energy on x86-64, and on the board the INA260, which sees the whole module and gives the energy a backend draws above idle. The rankings of the backends agree across platforms; the joules cannot be compared. The selection is not affected, because `synthesize` compares backends only with each other, on one machine. `LOGBOOK.md` §7 explains the choice and its consequences.
+**Energy is measured differently on the two platforms, on purpose.** Each platform is measured with the finest instrument it offers: RAPL's per-core energy on x86-64, and on the board the INA260, which sees the whole module and gives the energy a backend draws above idle. The rankings of the backends agree across platforms; the joules cannot be compared. The selection is not affected, because `synthesize` compares backends only with each other, on one machine. `LOGBOOK.md` §5 explains the choice and its consequences.
 
 **Energy differences below ~1% are not resolved on the board.** A single measurement varies by 1–3%. Backends further apart than that rank consistently; `enc_s02_n01` and `enc_s02_n02`, 0.1% apart, alternate between runs, which is the honest answer of the sensor.
 
@@ -370,7 +393,7 @@ The new backend stays in use until the container restarts. To go back to the ini
 
 **The test certificate is not verified.** The server presents a self-signed certificate (`certs/certfile.crt`, valid until 18 January 2027), and the client does not check it. Its expiry will not break transfers, but the client does not authenticate the server either.
 
-**Two weaknesses inherited from upstream, left open.** Neither affects normal operation. `./send` accepts a mode of the wrong security level: `./send 5545 98` puts the low-level port on an AES-256 backend, and every transfer on it breaks; `./synthesize` never does this. And the server writes decrypted data as it arrives and checks the authentication tag only at the end: on a mismatch it keeps the file and does not tell the client. `LOGBOOK.md` §8 describes both and how they could be closed.
+**Two weaknesses inherited from upstream, left open.** Neither affects normal operation. `./send` accepts a mode of the wrong security level: `./send 5545 98` puts the low-level port on an AES-256 backend, and every transfer on it breaks; `./synthesize` never does this. And the server writes decrypted data as it arrives and checks the authentication tag only at the end: on a mismatch it keeps the file and does not tell the client. `LOGBOOK.md` §6 describes both and how they could be closed.
 
 ---
 
@@ -380,7 +403,7 @@ On aarch64 the container builds on [`al3monni/kria-ubuntu:22.04.5`](https://hub.
 
 Stock `ubuntu:22.04` is the same distribution but not the same userspace: AMD's Kria image carries board-specific tooling, such as `xmutil` and the platform-statistics utilities. Building on a frozen snapshot also means the toolchain does not depend on what happens to be installed on the board at build time.
 
-Nothing about the application is baked into that snapshot: every build step lives in the tracked `Dockerfile`. The procedure for regenerating and republishing the image, including the exclusion mistakes that are easy to make, is in [`LOGBOOK.md`](LOGBOOK.md) §10.
+Nothing about the application is baked into that snapshot: every build step lives in the tracked `Dockerfile`. The procedure for regenerating and republishing the image, including the exclusion mistakes that are easy to make, is in [`LOGBOOK.md`](LOGBOOK.md) §8.
 
 ---
 

@@ -127,7 +127,7 @@ ssh ubuntu@192.168.137.50
 
 ## 6. Install Docker
 
-> If you intend to regenerate the project's base image from this board, take the rootfs snapshot **now, before installing Docker**. See [`LOGBOOK.md`](LOGBOOK.md) §10 — a board with Docker already running carries an image store that would otherwise end up inside the snapshot.
+> If you intend to regenerate the project's base image from this board, take the rootfs snapshot **now, before installing Docker**. See [`LOGBOOK.md`](LOGBOOK.md) §8 — a board with Docker already running carries an image store that would otherwise end up inside the snapshot.
 
 ```bash
 curl -fsSL https://get.docker.com | sudo sh
