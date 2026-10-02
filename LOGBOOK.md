@@ -13,7 +13,7 @@ This logbook records the modifications that took **spdocker** from an x86-only p
 
 ### How to read the modifications
 
-Every modification in §3 and §4 carries a number (`M1` … `M18`), a level and the architecture it concerns.
+Every modification in §3 and §4 carries a number (`M1` … `M19`), a level and the architecture it concerns.
 
 | Level | Meaning | How it looks |
 |---|---|---|
@@ -28,7 +28,7 @@ Architecture tags: `arm` (aarch64 only), `x86` (x86-64 only), `both`.
 1. [What this project is](#1-what-this-project-is)
 2. [What was broken](#2-what-was-broken)
 3. [Baseline: making upstream run at all](#3-baseline-making-upstream-run-at-all) — M1 … M3
-4. [Port modifications](#4-port-modifications) — M4 … M18
+4. [Port modifications](#4-port-modifications) — M4 … M19
 5. [Host prerequisites](#5-host-prerequisites)
 6. [Build and run](#6-build-and-run)
 7. [Verification](#7-verification)
@@ -143,6 +143,8 @@ BuildKit builds only the stages the target depends on, so an x86-64 build never 
 #### 🟡 M5 · Build likwid for ARMv8
 `arm` · `Dockerfile` · `9207e41`
 
+*Superseded by M19: once the board measured through the INA260 (M12), likwid was no longer needed there, and it is no longer built on aarch64. Kept for the record.*
+
 likwid's build ties compiler and architecture together: its default `COMPILER = GCC` means *GCC on x86*, and on aarch64 it tries to compile its x86 register-access layer. On arm64 builds the Dockerfile rewrites likwid's `config.mk` before compiling:
 
 | Setting | Value | Why |
@@ -156,7 +158,7 @@ On ARM likwid can read the performance counters (cycles, instructions, caches) b
 <details>
 <summary>🟢 <b>M6 · Build likwid before copying the sources</b> — <code>both</code> · <code>Dockerfile</code> · <code>d01abde</code></summary>
 
-Compiling likwid is the longest step of the build (about 370 s on the board). Its download and build were moved above the `COPY` of the sources, so editing a source file no longer invalidates the likwid layer: later builds reuse it and restart from the `COPY`, in seconds.
+Compiling likwid is the longest step of the build (about 370 s on the board). Its download and build were moved above the `COPY` of the sources, so editing a source file no longer invalidates the likwid layer: later builds reuse it and restart from the `COPY`, in seconds. Since M19 likwid is built on x86-64 only.
 
 </details>
 
@@ -164,6 +166,13 @@ Compiling likwid is the longest step of the build (about 370 s on the board). It
 <summary>🟢 <b>M7 · Install <code>build-essential</code> instead of <code>gcc</code></b> — <code>both</code> · <code>Dockerfile</code> · <code>e5edc89</code></summary>
 
 The Dockerfile installed `gcc` alone, which brings the compiler without the C library headers (`libc6-dev`) and without `make`. On a fuller base image these arrived as dependencies of other packages; on a minimal one the build failed. `build-essential` installs all three.
+
+</details>
+
+<details>
+<summary>🟢 <b>M19 · Build likwid on x86-64 only</b> — <code>arm</code> · <code>Dockerfile</code> · <code>52c6544</code></summary>
+
+Since M12 the board measures energy through the INA260, and `profile01.c` calls `likwid-perfctr` only on x86-64; on aarch64 likwid was downloaded and compiled (M5) but never run. The Dockerfile now builds it only when the target is not `arm64`. This removes the longest step of a clean build on the board (about 370 s, M6) and its dependence on likwid's download server; the x86-64 build is unchanged. Checked by a clean build on both architectures: on the board no likwid step runs, and on x86-64 `test/test.sh -all` passes, with energy still measured through likwid.
 
 </details>
 
@@ -438,7 +447,7 @@ cd myrtus-psm-edge
 docker compose -f compose-server.yml up --build
 ```
 
-A clean build on the KV260 takes about ten minutes: ~135 s for the packages, ~370 s for likwid. Later builds reuse those layers and restart from the copy of the sources (M6).
+A clean build on the KV260 takes a few minutes, ~135 s of them for the packages, plus the download of the base image the first time; likwid, ~370 s more, is no longer built on the board (M19). Later builds reuse those layers and restart from the copy of the sources (M6).
 
 ### 6b. On x86-64
 
@@ -638,6 +647,7 @@ These follow from the choice and from the hardware; they are properties of the m
 - **The x86 measurement no longer hangs** when likwid cannot start its counters, and no longer registers zeros when it cannot measure (M13).
 - **The round-trip test and the received-files directory are back** (M15).
 - **Files of every size arrive intact**, and the OpenSSL path (mode 0) works and checks the tag (M17, M18).
+- **The board no longer builds likwid**, which it never ran (M19).
 
 ### Open points
 
@@ -678,6 +688,7 @@ Each modification with the commits that implement it. `git log --oneline main` g
 | 🟡 M16 · Repository cleanup and layout | `dc78a00`, `bb4ce8c`, `fec03c9`, `baf99d5`, `655b706`, `f9b0579`, `dbd62c2`, `2a464e4`, `b1bd298`, `286472e`, `e297cdd`, `4b0a988`, `f374710` |
 | 🟡 M17 · Files of every size | `7440efc`, `ee3af93` |
 | 🟡 M18 · OpenSSL path (mode 0) | `7440efc` |
+| 🟢 M19 · likwid on x86-64 only | `52c6544` |
 | Base image snapshot (§12) | `66baa82` |
 
 ---

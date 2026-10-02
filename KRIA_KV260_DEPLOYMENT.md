@@ -192,7 +192,7 @@ docker compose -f compose-server.yml up --build
 
 To test a newer version later, `git pull` and run the same `docker compose` command again. From here, follow [`README.md`](README.md) for what a successful start looks like and how to run the tests.
 
-Expect the first build to take around ten minutes and to pull a couple of GB for the base image. Keep an eye on free space — `df -h /` — since the OS, the base image and the built application together will use a substantial share of a 32 GB card.
+Expect the first build to pull a couple of GB for the base image and then to take a few minutes. Keep an eye on free space — `df -h /` — since the OS, the base image and the built application together will use a substantial share of a 32 GB card.
 
 ---
 

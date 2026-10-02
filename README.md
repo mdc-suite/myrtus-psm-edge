@@ -150,7 +150,7 @@ cd myrtus-psm-edge
 docker compose -f compose-server.yml up --build
 ```
 
-A clean first build takes roughly ten minutes on the KV260, most of it compiling likwid. Later builds reuse that layer and finish in seconds.
+A clean first build on the KV260 downloads the base image, about 2 GB compressed, and then takes a few minutes, most of them installing packages. Later builds reuse those layers and finish in seconds.
 
 ### On an x86-64 host
 
