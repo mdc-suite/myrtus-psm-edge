@@ -25,6 +25,109 @@ The eight backends span two security levels (AES-128 and AES-256) and four imple
 
 ---
 
+## Build and run
+
+The component runs in a Docker container, on either of two targets:
+
+- the **Kria KV260** board (aarch64), the edge platform it is meant for;
+- an **x86-64 PC running Ubuntu natively**, directly on the hardware. A virtual machine, WSL2 or Docker Desktop will not do: the energy of the backends cannot be measured there, and a backend that cannot be measured is not registered.
+
+Each target builds the image for its own architecture, on the target itself. Steps 1 and 2 depend on the target; from step 3 on they are the same on both.
+
+### 1. Prepare the target
+
+**Kria KV260.** Follow [`KRIA_KV260_DEPLOYMENT.md`](KRIA_KV260_DEPLOYMENT.md). It takes the board from an empty microSD card to Ubuntu 22.04 with network access, SSH and Docker, with your user in the `docker` group. Keep a few GB free on the card for the images.
+
+**x86-64 PC.** Ubuntu 22.04 or later, installed natively, with:
+
+- **Docker Engine and its compose plugin**: `sudo apt install docker.io docker-compose-v2`;
+- **your user in the `docker` group**, so that Docker commands work without `sudo`: `sudo usermod -aG docker $USER`, then reboot. Logging out is not always enough for the new group to apply. Afterwards `docker version` must answer without `sudo`;
+- **Secure Boot disabled**, so that the processor's energy registers can be read: `cat /sys/kernel/security/lockdown` must print `[none]`. If the PC also boots Windows with BitLocker, have the recovery key at hand before changing the setting.
+
+### 2. Open a terminal on the target
+
+**Kria KV260.** From your PC, connect to the board with the address set during bring-up (§5 of the guide):
+
+```bash
+ssh ubuntu@192.168.137.50
+```
+
+**x86-64 PC.** Open a terminal on it, directly or over SSH, and load the kernel module through which the energy registers are read. It is needed again after every reboot:
+
+```bash
+sudo modprobe msr
+```
+
+### 3. Get the code
+
+The first time:
+
+```bash
+git clone https://github.com/mdc-suite/myrtus-psm-edge.git
+cd myrtus-psm-edge
+```
+
+Later, to update it:
+
+```bash
+cd myrtus-psm-edge
+git pull
+```
+
+If the repository is private, clone `git@github.com:mdc-suite/myrtus-psm-edge.git` instead, with an SSH key that has access to it. On the board this is the deploy key of §7 of the bring-up guide.
+
+### 4. Build and start the container
+
+```bash
+docker compose -f compose-server.yml up -d --build
+```
+
+This builds the image, starts the container in the background and gives the prompt back. The first build takes about 16 minutes on the board, more than half of them to download and unpack the 2 GB base image, and about 3 minutes on x86-64. Later builds reuse what is already built and take seconds.
+
+### 5. Watch the start
+
+```bash
+docker logs -f Test-server
+```
+
+This shows the container's output as it runs. At every start the container registers the eight backends, measuring each one, which takes a few minutes on the board; then it starts the server. The start has succeeded when the output ends like this:
+
+```
+Resetting Initial Configuration
+Registering Implementation in ./f1
+...
+Registering Implementation in ./f8
+Done
+Creating Shared Library lib_enc.so
+Updating Paths
+OpenSSL 3.0.2 15 Mar 2022 (Library: OpenSSL 3.0.2 15 Mar 2022)
+built on: ...
+platform: debian-arm64
+options:  bn(64,64)
+```
+
+Check that no error follows `Creating Shared Library`, and that `platform` matches the target: `debian-arm64` on the board, `debian-amd64` on x86-64. Then press **Ctrl+C**. It stops showing the output; the container keeps running.
+
+The `Registering Implementation` lines appear whatever happens. Whether all eight backends were registered is checked in the next step.
+
+### 6. Run the tests
+
+```bash
+test/test.sh -all
+```
+
+This checks the build (eight backends registered and measured, the server listening), sends a file on both security levels and compares what arrives byte for byte, switches backend at runtime, and repeats the transfers with files of 18 sizes. For each test it prints the command, the expected and the obtained result. The run must end with `ALL 13 TESTS PASSED`. Without `-all` it runs a shorter subset; *Tests* explains every check.
+
+### 7. Stop the container
+
+```bash
+docker compose -f compose-server.yml down
+```
+
+This stops and removes the container. Until you do, it keeps running, and it starts again by itself after a reboot of the target. Stopping it loses nothing: every start registers and measures the backends again.
+
+---
+
 ## How it works
 
 Everything runs inside one container. This section follows the execution from the moment the container starts to the moment a file is received, and then shows how the backend is switched at runtime.
@@ -118,69 +221,6 @@ Nothing runs `synthesize` automatically: today the selection is a manual step.
 
 ---
 
-## Requirements
-
-### On the board
-
-An AMD/Xilinx Kria KV260 running Ubuntu 22.04 IoT, with Docker Engine installed. Full bring-up instructions — flashing, serial console, networking, Docker — are in [`KRIA_KV260_DEPLOYMENT.md`](KRIA_KV260_DEPLOYMENT.md).
-
-Check that your user is in the `docker` group (`docker version` should respond without `sudo`), and that the microSD has several GB free: the base image alone is around 2 GB compressed.
-
-### On an x86-64 host (bare metal)
-
-x86-64 needs bare-metal Linux with Docker Engine. Every backend is measured when it registers, and one that cannot be measured is not registered: under WSL2, Docker Desktop or a virtual machine likwid finds no RAPL registers, so the image builds but no backend registers. On bare metal:
-
-- **Secure Boot disabled.** With Secure Boot on, the kernel refuses raw MSR access and likwid cannot start its counters; `cat /sys/kernel/security/lockdown` must read `[none]`. On a machine that dual-boots Windows with BitLocker, have the recovery key ready before changing the setting.
-- **The `msr` module loaded**, after every boot: `sudo modprobe msr` (or add `msr` to `/etc/modules-load.d/`).
-
-`LOGBOOK.md` §5b has the checks, including how to confirm from inside the container that likwid reads the `ENERGY` group.
-
-Each host builds for its own architecture, and all eight backends build on both: `f7` and `f8` carry both AES implementations and pick one at compile time, AES-NI on x86-64 and the ARMv8 Crypto Extensions on the Kria. There is no cross-build: the aarch64 image is built on the board itself.
-
----
-
-## Build and run
-
-### On the board
-
-```bash
-git clone https://github.com/mdc-suite/myrtus-psm-edge.git
-cd myrtus-psm-edge
-
-docker compose -f compose-server.yml up --build
-```
-
-A clean first build on the KV260 downloads the base image, about 2 GB compressed, and then takes a few minutes, most of them installing packages. Later builds reuse those layers and finish in seconds.
-
-### On an x86-64 host
-
-The same command, with no build argument: the Dockerfile picks `ubuntu:22.04` as the base on x86-64.
-
-```bash
-sudo modprobe msr
-docker compose -f compose-server.yml up --build
-```
-
-### What a successful start looks like
-
-```
-Resetting Initial Configuration
-Registering Implementation in ./f1
-...
-Registering Implementation in ./f8
-Done
-Creating Shared Library lib_enc.so
-Updating Paths
-OpenSSL 3.0.2 15 Mar 2022 (Library: OpenSSL 3.0.2 15 Mar 2022)
-platform: debian-arm64
-```
-
-Two things to check in that output: `Creating Shared Library` is not followed by an `ld` error, and the platform matches the host — `debian-arm64` on the board, `debian-amd64` on x86-64.
-
-The `Registering Implementation` lines are printed whatever happens, because `start.sh` discards the output of each registration. Whether all eight backends registered is checked in the tests below, not read from the log.
-
----
-
 ## Tests
 
 There are three layers of tests: the ones the pipeline runs by itself at every start, the checks you run once the container is up, and the end-to-end tests of transfers and backend switching. `test/test.sh` runs the last two for you.
@@ -201,7 +241,7 @@ A failure in any of them removes one backend and nothing else, silently. The che
 
 ### Running the checks: `test/test.sh`
 
-Once the container has started (the log shows the OpenSSL banner), run the script from the repository, on the host, in another terminal:
+Once the container has started (step 5 of *Build and run*), run the script on the target, from the repository:
 
 ```bash
 test/test.sh          # the build checks (1-6 below) and the round trip on both levels

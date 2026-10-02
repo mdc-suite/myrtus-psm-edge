@@ -184,15 +184,9 @@ The first connection asks you to confirm GitHub's host key — type `yes` in ful
 
 ## 8. Build and run the project
 
-```bash
-git clone https://github.com/mdc-suite/myrtus-psm-edge.git     # private repository: git@github.com:mdc-suite/myrtus-psm-edge.git
-cd myrtus-psm-edge
-docker compose -f compose-server.yml up --build
-```
+The board is ready. Continue with [`README.md`](README.md), *Build and run*, from step 2: connect over SSH, clone the repository, build and start the container, run the tests.
 
-To test a newer version later, `git pull` and run the same `docker compose` command again. From here, follow [`README.md`](README.md) for what a successful start looks like and how to run the tests.
-
-Expect the first build to pull a couple of GB for the base image and then to take a few minutes. Keep an eye on free space — `df -h /` — since the OS, the base image and the built application together will use a substantial share of a 32 GB card.
+The first build takes about 16 minutes, more than half of them to download and unpack the 2 GB base image. Keep an eye on free space — `df -h /` — since the OS, the base image and the built application together will use a substantial share of a 32 GB card.
 
 ---
 
@@ -227,3 +221,5 @@ sudo systemctl stop unattended-upgrades.service anacron.timer dpkg-db-backup.tim
 **`dhclient` never gets a lease.** Toggle the ICS checkbox off and on in `ncpa.cpl`.
 
 **`permission denied` from Docker.** The `docker` group membership has not been applied to this session yet — reconnect.
+
+**`401 Unauthorized` when the build pulls the base image.** The image is public, but Docker is sending credentials left by an earlier `docker login` that have since expired. `docker logout` makes it pull anonymously.

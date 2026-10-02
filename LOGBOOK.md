@@ -13,7 +13,7 @@ This logbook records the modifications that took **spdocker** from an x86-only p
 
 ### How to read the modifications
 
-Every modification in §3 and §4 carries a number (`M1` … `M19`), a level and the architecture it concerns.
+Every modification in §3 and §4 carries a number (`M1` … `M20`), a level and the architecture it concerns.
 
 | Level | Meaning | How it looks |
 |---|---|---|
@@ -28,7 +28,7 @@ Architecture tags: `arm` (aarch64 only), `x86` (x86-64 only), `both`.
 1. [What this project is](#1-what-this-project-is)
 2. [What was broken](#2-what-was-broken)
 3. [Baseline: making upstream run at all](#3-baseline-making-upstream-run-at-all) — M1 … M3
-4. [Port modifications](#4-port-modifications) — M4 … M19
+4. [Port modifications](#4-port-modifications) — M4 … M20
 5. [Host prerequisites](#5-host-prerequisites)
 6. [Build and run](#6-build-and-run)
 7. [Verification](#7-verification)
@@ -172,7 +172,7 @@ The Dockerfile installed `gcc` alone, which brings the compiler without the C li
 <details>
 <summary>🟢 <b>M19 · Build likwid on x86-64 only</b> — <code>arm</code> · <code>Dockerfile</code> · <code>52c6544</code></summary>
 
-Since M12 the board measures energy through the INA260, and `profile01.c` calls `likwid-perfctr` only on x86-64; on aarch64 likwid was downloaded and compiled (M5) but never run. The Dockerfile now builds it only when the target is not `arm64`. This removes the longest step of a clean build on the board (about 370 s, M6) and its dependence on likwid's download server; the x86-64 build is unchanged. Checked by a clean build on both architectures: on the board no likwid step runs, and on x86-64 `test/test.sh -all` passes, with energy still measured through likwid.
+Since M12 the board measures energy through the INA260, and `profile01.c` calls `likwid-perfctr` only on x86-64; on aarch64 likwid was downloaded and compiled (M5) but never run. The Dockerfile now builds it only when the target is not `arm64`. This takes about 370 s (M6) off a clean build on the board, and with them its dependence on likwid's download server; the x86-64 build is unchanged. Checked with a clean build on both architectures (§6a): on the board the step now takes 1.4 s, on x86-64 it builds likwid as before, and `test/test.sh -all` passes on both, with energy on x86-64 still measured through likwid.
 
 </details>
 
@@ -332,6 +332,15 @@ A clean-up of leftovers (`fec03c9`) also removed two things the runtime needs:
 
 </details>
 
+<details>
+<summary>🟢 <b>M20 · Stop the container at once</b> — <code>both</code> · <code>compose-server.yml</code> · <code>6890ce2</code></summary>
+
+`docker compose down`, or Ctrl-C on an attached `up`, took 10 s and ended with `exited with code 137`. In a container the first process, PID 1, is `start.sh`, and Linux does not apply the default action of a signal to a PID 1 that has no handler for it: neither `start.sh` nor the server handles `SIGTERM`, so the stop request was ignored until Docker gave up after 10 s and sent `SIGKILL` (137 = 128 + 9). Nothing was lost, since every start rebuilds the state, but the stop was slow and looked like a crash. The behaviour came from upstream.
+
+`init: true` in the compose file makes Docker's own minimal init (`docker-init`) PID 1. It passes `SIGTERM` on to `start.sh`, which is no longer PID 1 and terminates; the container stops at once with code 143 (128 + 15), the usual code of a container stopped with `SIGTERM`. Checked with Docker's `docker-init` in a separate PID namespace: a shell that waits on a foreground child, as `start.sh` waits on the server, ignored `SIGTERM` as PID 1 and stopped in 4 ms under `docker-init`.
+
+</details>
+
 ### 4.6 Repository
 
 #### 🟡 M16 · Clean the repository and give it a structure
@@ -438,30 +447,37 @@ The output must end with `Energy Core [J]` and `Energy PKG [J]` values. On AMD p
 
 ## 6. Build and run
 
-### 6a. On the board
+The same steps on both architectures, after the prerequisites of §5. The README, *Build and run*, walks through them one by one.
 
 ```bash
 git clone https://github.com/mdc-suite/myrtus-psm-edge.git
 cd myrtus-psm-edge
-
-docker compose -f compose-server.yml up --build
+sudo modprobe msr                                     # x86-64 only, after every boot (§5b)
+docker compose -f compose-server.yml up -d --build    # build, then start in the background
+docker logs -f Test-server                            # follow the start; Ctrl-C stops following, not the container
+test/test.sh -all                                     # §7
+docker compose -f compose-server.yml down             # stop and remove the container
 ```
 
-A clean build on the KV260 takes a few minutes, ~135 s of them for the packages, plus the download of the base image the first time; likwid, ~370 s more, is no longer built on the board (M19). Later builds reuse those layers and restart from the copy of the sources (M6).
+The compose file sets `restart: unless-stopped`: the container comes back by itself after a reboot of the host or of Docker, until it is stopped with `down`, which returns at once since M20.
 
-### 6b. On x86-64
+### 6a. Build time
 
-After the prerequisites of §5b, the same command, with no build argument (M4):
+Measured on 2 October 2026, at `d83cf3c`:
 
-```bash
-git clone https://github.com/mdc-suite/myrtus-psm-edge.git
-cd myrtus-psm-edge
+| Step | Kria KV260 | x86-64 (Ryzen 5 3500U) |
+|---|---|---|
+| Base image: download | 107 s (2.07 GB) | already present (30 MB) |
+| Base image: unpack | 440 s | |
+| Packages (`apt-get`) | 318 s | 60 s |
+| likwid | not built: 1.4 s (M19) | 81 s |
+| Component (`gcc`, `make`) | ~20 s | ~3 s |
+| Export of the image | 77 s | 27 s |
+| **Total** | **969 s, ~16 min** | **173 s, ~3 min** |
 
-sudo modprobe msr
-docker compose -f compose-server.yml up --build
-```
+On the board the build started from an empty Docker (`docker system prune -a`): unpacking the base image onto the microSD is the longest step. On x86-64 it was `docker compose build --no-cache` with the base image already present; downloading `ubuntu:22.04` adds a few seconds. The packages depend on the network, which on the board goes through Windows ICS. Later builds reuse the cached layers and restart from the copy of the sources, in seconds (M6).
 
-### 6c. What a successful start looks like
+### 6b. What a successful start looks like
 
 - `Registering Implementation in ./f1 … ./f8`, then `Done`
 - `Creating Shared Library lib_enc.so` with **no `ld` error** below it
@@ -470,23 +486,11 @@ docker compose -f compose-server.yml up --build
 
 `Registering Implementation in ./fN` is printed whatever happens, because `start.sh` discards the output of each registration. Whether all eight registered is checked in §7, not read from the log.
 
-### 6d. Running in the background
-
-`docker compose … up` stays attached to the terminal and shows the log, which is useful for a first check; `Ctrl-C` stops the container. Once the start looks right, run it **detached** with `-d`:
-
-```bash
-docker compose -f compose-server.yml up -d --build   # starts in the background and returns the prompt
-docker logs -f Test-server                           # follow the log; Ctrl-C stops following, not the container
-docker compose -f compose-server.yml down            # stop and remove the container
-```
-
-The compose file sets `restart: unless-stopped`: a detached container comes back by itself after a reboot of the host or of Docker, until it is stopped explicitly with `down`.
-
 ---
 
 ## 7. Verification
 
-Run these against a container that has finished its start pipeline. `test/test.sh` runs them from the host and reports, for each, the command, the expected and the obtained result (README, *Tests*): with no option the build checks and the round trip, with `-rapid` the build checks only, with `-all` also the runtime switch and the file sizes of M17 and M18. The commands below are the same checks by hand.
+Run these against a container that has finished its start pipeline. `test/test.sh` runs them on the target and reports, for each, the command, the expected and the obtained result (README, *Tests*): with no option the build checks and the round trip, with `-rapid` the build checks only, with `-all` also the runtime switch and the file sizes of M17 and M18. The commands below are the same checks by hand.
 
 > [!NOTE]
 > Compose calls the service `ssl-server`, and the container it creates is `Test-server`. `docker compose` subcommands take the service name; `docker exec` and `docker logs` take the container name. Mixing them up gives a "no such service/container" error.
@@ -648,6 +652,7 @@ These follow from the choice and from the hardware; they are properties of the m
 - **The round-trip test and the received-files directory are back** (M15).
 - **Files of every size arrive intact**, and the OpenSSL path (mode 0) works and checks the tag (M17, M18).
 - **The board no longer builds likwid**, which it never ran (M19).
+- **The container stops at once**, instead of being killed after 10 s (M20).
 
 ### Open points
 
@@ -689,6 +694,7 @@ Each modification with the commits that implement it. `git log --oneline main` g
 | 🟡 M17 · Files of every size | `7440efc`, `ee3af93` |
 | 🟡 M18 · OpenSSL path (mode 0) | `7440efc` |
 | 🟢 M19 · likwid on x86-64 only | `52c6544` |
+| 🟢 M20 · Stop at once (`init: true`) | `6890ce2` |
 | Base image snapshot (§12) | `66baa82` |
 
 ---

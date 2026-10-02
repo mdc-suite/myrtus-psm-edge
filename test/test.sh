@@ -1,8 +1,8 @@
 #!/bin/sh
 # test/test.sh -- check a running container against the expected results.
 #
-# Run on the host, from another terminal, once the container has finished its start
-# pipeline (docker logs shows the OpenSSL banner):
+# Run on the target, from the repository, once the container has finished its start
+# pipeline (docker logs Test-server shows the OpenSSL banner):
 #
 #   test/test.sh          build checks, then a round trip of rfile on both security levels
 #   test/test.sh -rapid   build checks only
@@ -95,16 +95,16 @@ sizes() {
 
 # --- can the tests run at all?
 if ! docker version >/dev/null 2>&1; then
-    echo "cannot reach Docker: is it running, and is this user in the docker group (or use sudo)?" >&2
+    echo "cannot reach Docker: is it running, and is this user in the docker group?" >&2
     exit 2
 fi
 if [ "$(docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null)" != true ]; then
-    echo "container $C is not running: start it with docker compose -f compose-server.yml up --build" >&2
+    echo "container $C is not running: start it with docker compose -f compose-server.yml up -d --build" >&2
     exit 2
 fi
 if ! in_c "lsof -i -P -n | grep -q ':5545 (LISTEN)'"; then
     echo "the server is not listening yet: the container is still registering the backends" >&2
-    echo "(several minutes on the board). Wait for the OpenSSL banner in docker logs $C." >&2
+    echo "(several minutes on the board). Wait for the OpenSSL banner in docker logs -f $C." >&2
     exit 2
 fi
 
