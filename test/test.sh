@@ -1,8 +1,9 @@
 #!/bin/sh
 # test/test.sh -- check a running container against the expected results.
 #
-# Run on the target, from the repository, once the container has finished its start
-# pipeline (docker logs Test-server shows the OpenSSL banner):
+# Run on the target, from the repository, once the container has been started
+# (docker compose -f compose-server.yml up -d --build). If it is still starting, the script
+# shows its output until the server is up, then runs the tests:
 #
 #   test/test.sh          build checks, then a round trip of rfile on both security levels
 #   test/test.sh -rapid   build checks only
@@ -102,11 +103,35 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null)" != true ]; the
     echo "container $C is not running: start it with docker compose -f compose-server.yml up -d --build" >&2
     exit 2
 fi
-if ! in_c "lsof -i -P -n | grep -q ':5545 (LISTEN)'"; then
-    echo "the server is not listening yet: the container is still registering the backends" >&2
-    echo "(several minutes on the board). Wait for the OpenSSL banner in docker logs -f $C." >&2
-    exit 2
+
+# --- wait for the start pipeline. The banner's last line, "options:", marks a started server.
+# Only the log is read, from outside: nothing runs in the container while it measures.
+started=$(docker inspect -f '{{.State.StartedAt}}' "$C")
+CR=$(printf '\r')
+if ! docker logs --since "$started" "$C" 2>&1 | grep -q '^options:'; then
+    printf "${B}The container is still starting: its output follows until the server is up.${X}\n"
+    d=$(mktemp -d) && mkfifo "$d/log" || exit 2
+    docker logs -f --since "$started" "$C" > "$d/log" 2>&1 &
+    lp=$!
+    trap 'kill $lp 2>/dev/null; rm -rf "$d"; exit 130' INT TERM
+    up=no
+    while IFS= read -r l; do
+        l=${l%"$CR"}
+        printf '  | %s\n' "$l"
+        case $l in options:*) up=yes; break ;; esac
+    done < "$d/log"
+    kill $lp 2>/dev/null
+    wait $lp 2>/dev/null
+    rm -rf "$d"
+    trap - INT TERM
+    if [ $up = no ]; then
+        echo "the container stopped before the server came up: see docker logs $C" >&2
+        exit 2
+    fi
 fi
+# the banner comes just before the two ports are opened
+t=0
+until in_c "lsof -i -P -n | grep -q ':5545 (LISTEN)'" || [ $t -ge 20 ]; do sleep 0.5; t=$((t + 1)); done
 
 case $(uname -m) in
     aarch64|arm64) MACHINE=AArch64 ;;

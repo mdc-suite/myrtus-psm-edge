@@ -86,13 +86,13 @@ docker compose -f compose-server.yml up -d --build
 
 This builds the image, starts the container in the background and gives the prompt back. The first build takes about 16 minutes on the board, more than half of them to download and unpack the 2 GB base image, and about 3 minutes on x86-64. Later builds reuse what is already built and take seconds.
 
-### 5. Watch the start
+### 5. Run the tests
 
 ```bash
-docker logs -f Test-server
+test/test.sh -all
 ```
 
-This shows the container's output as it runs. At every start the container registers the eight backends, measuring each one, which takes a few minutes on the board; then it starts the server. The start has succeeded when the output ends like this:
+If the container is still starting, the script first shows its output and waits. At every start the container registers the eight backends, measuring each one, which takes a few minutes on the board, and then starts the server. The start has succeeded when the output ends like this:
 
 ```
 Resetting Initial Configuration
@@ -108,19 +108,13 @@ platform: debian-arm64
 options:  bn(64,64)
 ```
 
-Check that no error follows `Creating Shared Library`, and that `platform` matches the target: `debian-arm64` on the board, `debian-amd64` on x86-64. Then press **Ctrl+C**. It stops showing the output; the container keeps running.
+No error should follow `Creating Shared Library`, and `platform` should match the target: `debian-arm64` on the board, `debian-amd64` on x86-64. The `Registering Implementation` lines appear whatever happens, because `start.sh` hides the output of each registration; whether all eight backends were registered is the first thing the tests check.
 
-The `Registering Implementation` lines appear whatever happens, because `start.sh` hides the output of each registration. Whether all eight backends were registered is checked in the next step.
+As soon as the server is up, the tests start. They check the build (eight backends registered and measured, the server listening), send a file on both security levels and compare what arrives byte for byte, switch backend at runtime, and repeat the transfers with files of 18 sizes. For each test the script prints the command, the expected and the obtained result. The run must end with `ALL 13 TESTS PASSED`. Without `-all` it runs a shorter subset; *Tests* explains every check.
 
-### 6. Run the tests
+To follow the container's output without running the tests: `docker logs -f Test-server`. Ctrl+C stops following; the container keeps running.
 
-```bash
-test/test.sh -all
-```
-
-This checks the build (eight backends registered and measured, the server listening), sends a file on both security levels and compares what arrives byte for byte, switches backend at runtime, and repeats the transfers with files of 18 sizes. For each test it prints the command, the expected and the obtained result. The run must end with `ALL 13 TESTS PASSED`. Without `-all` it runs a shorter subset; *Tests* explains every check.
-
-### 7. Stop the container
+### 6. Stop the container
 
 ```bash
 docker compose -f compose-server.yml down
@@ -266,7 +260,7 @@ A failure in any of them removes one backend and nothing else, silently. The che
 
 ### Running the checks: `test/test.sh`
 
-Once the container has started (step 5 of *Build and run*), run the script on the target, from the repository:
+Once the container has been started (step 4 of *Build and run*), run the script on the target, from the repository. If the container is still starting, the script shows its output until the server is up, then runs the tests:
 
 ```bash
 test/test.sh          # the build checks (1-6 below) and the round trip on both levels
@@ -284,7 +278,7 @@ For each test it prints the command it runs in the container, the expected and t
       PASS
 ```
 
-The exit status is `0` when every test passed, `1` when any failed, and `2` when the tests could not run: Docker unreachable, container stopped, or still registering its backends. Nothing is rebuilt or restarted, so the script can be run any number of times on the same container. `-all` switches backends while it runs and leaves both ports on their initial ones (`./send 5544 98`, `./send 5545 82`).
+The exit status is `0` when every test passed, `1` when any failed, and `2` when the tests could not run: Docker unreachable, or the container stopped, or stopped before its server came up. Nothing is rebuilt or restarted, so the script can be run any number of times on the same container. `-all` switches backends while it runs and leaves both ports on their initial ones (`./send 5544 98`, `./send 5545 82`).
 
 The sections below are the same checks one by one, with the commands to run them by hand. A command printed by the script runs in the container as it is: `docker exec -it Test-server sh`, then `cd /app`.
 
