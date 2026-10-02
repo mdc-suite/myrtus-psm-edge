@@ -8,6 +8,7 @@ services:
       - "5544:5544"
       - "5545:5545"
     restart: unless-stopped
+    init: true                # PID 1 is Docker's init, which passes SIGTERM on: down and Ctrl-C stop at once
     command: /app/server
     tty: true
     stdin_open: true
