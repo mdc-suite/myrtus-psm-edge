@@ -80,7 +80,7 @@ On the board, check the assigned address:
 ip a show eth0
 ```
 
-### Assign a static IP (recommended)
+### Assign a static IP
 
 ICS also runs a DHCP server that hands the board an address, but it is not reliable: after a while — typically once Windows sleeps, reboots or changes network — it stops answering, the board's lease expires without being renewed, `eth0` drops its IPv4 address and SSH stops working.
 
@@ -110,16 +110,6 @@ ping -c 2 archive.ubuntu.com
 ```
 
 The static address makes SSH independent of ICS's DHCP, but internet access still goes through ICS's NAT. **If the host is reachable but the internet is not**, the fix is to uncheck the sharing box in `ncpa.cpl`, apply, then re-check it and apply again. Restarting the `SharedAccess` service does *not* reliably fix this, and doing so requires a genuinely elevated PowerShell prompt anyway.
-
-### Staying on DHCP
-
-If you skip the static address, check whether one has been assigned with `ip a show eth0` — you are looking for an `inet 192.168.137.x`. If there is none, request one:
-
-```bash
-sudo dhclient -v eth0
-```
-
-If `dhclient` loops on `DHCPDISCOVER` with no reply, apply the same ICS toggle described above. Expect to repeat this whenever the lease is lost; the address is not guaranteed to be the same afterwards, and `arp -a` from PowerShell shows what is on the `192.168.137.x` subnet.
 
 ### Switching to SSH
 
