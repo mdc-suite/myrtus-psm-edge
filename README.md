@@ -50,15 +50,14 @@ flowchart LR
 Each backend directory holds its source, its Makefile and a `config.txt` naming the security level, the source file and the AES function. `register -c ./fN/config.txt` takes the backend through a sequence of checks, and a backend that fails any of them is simply not registered:
 
 ```mermaid
-flowchart TD
-    A["compile fN"] --> B{"known-answer test"}
-    B -- "fails" --> X["not registered"]
-    B -- "passes" --> C{"symbol clash with LIB/?"}
-    C -- "yes" --> X
-    C -- "no" --> D["rename the function to enc_sXX_nYY"]
-    D --> E{"measure time and energy"}
-    E -- "fails" --> X
-    E -- "succeeds" --> F["install LIB/enc_sXX_nYY.o, record it in db.yaml and header.h"]
+flowchart LR
+    A("compile fN,<br/>known-answer test") -- "pass" --> C("symbol clash<br/>with LIB/?")
+    C -- "no" --> D["rename to<br/>enc_sXX_nYY"]
+    D --> E("measure time<br/>and energy")
+    E -- "ok" --> F["installed in LIB/"]
+    A -. "fail" .-> X["not registered"]
+    C -. "clash" .-> X
+    E -. "fail" .-> X
 ```
 
 - **Known-answer test.** `register` fills a template (`check1.c` for AES-128, `check2.c` for AES-256) with a call to the backend, compiles it with the backend's object and runs it: the backend must encrypt a fixed plaintext under a fixed key into the expected ciphertext. This is what proves that a backend computes AES correctly.
