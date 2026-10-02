@@ -26,19 +26,14 @@ WORKDIR /app
 # set the TARGETARCH build argument to the architecture of the target platform
 ARG TARGETARCH
 
-# download and build likwid-5.5.1 from source
-RUN wget http://ftp.fau.de/pub/likwid/likwid-5.5.1.tar.gz
-RUN tar -xaf likwid-5.5.1.tar.gz \
- && cd likwid-5.5.1 \
- && if [ "$TARGETARCH" = "arm64" ]; then \
-      sed -i -e 's|^COMPILER *=.*|COMPILER = GCCARMv8#NO SPACE|' \
-             -e 's|^ACCESSMODE *=.*|ACCESSMODE = perf_event#NO SPACE|' \
-             -e 's|^BUILDDAEMON *=.*|BUILDDAEMON = false#NO SPACE|' \
-             -e 's|^BUILDFREQ *=.*|BUILDFREQ = false#NO SPACE|' \
-             config.mk \
-      && grep -E '^(COMPILER|ACCESSMODE|BUILDDAEMON|BUILDFREQ)' config.mk ; \
-    fi \
- && make && make install
+# download and build likwid-5.5.1 from source, on x86-64 only: likwid measures energy
+# through the RAPL registers (profile01.c); on aarch64 the INA260 does, and likwid is unused
+RUN if [ "$TARGETARCH" != "arm64" ]; then \
+      wget http://ftp.fau.de/pub/likwid/likwid-5.5.1.tar.gz \
+      && tar -xaf likwid-5.5.1.tar.gz \
+      && cd likwid-5.5.1 \
+      && make && make install ; \
+    fi
 
 ENV LD_LIBRARY_PATH=:/app/LIB
 
