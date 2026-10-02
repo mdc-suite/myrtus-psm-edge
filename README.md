@@ -58,6 +58,8 @@ ssh ubuntu@192.168.137.50
 sudo modprobe msr
 ```
 
+To have it loaded at every boot instead, once: `echo msr | sudo tee /etc/modules-load.d/msr.conf`.
+
 ### 3. Get the code
 
 The first time:
@@ -108,7 +110,7 @@ options:  bn(64,64)
 
 Check that no error follows `Creating Shared Library`, and that `platform` matches the target: `debian-arm64` on the board, `debian-amd64` on x86-64. Then press **Ctrl+C**. It stops showing the output; the container keeps running.
 
-The `Registering Implementation` lines appear whatever happens. Whether all eight backends were registered is checked in the next step.
+The `Registering Implementation` lines appear whatever happens, because `start.sh` hides the output of each registration. Whether all eight backends were registered is checked in the next step.
 
 ### 6. Run the tests
 
@@ -358,7 +360,7 @@ The new backend stays in use until the container restarts. To go back to the ini
 
 ## Known limitations
 
-**Energy is measured differently on the two platforms, on purpose.** Each platform is measured with the finest instrument it offers: RAPL's per-core energy on x86-64, and on the board the INA260, which sees the whole module and gives the energy a backend draws above idle. The rankings of the backends agree across platforms; the joules cannot be compared. The selection is not affected, because `synthesize` compares backends only with each other, on one machine. `LOGBOOK.md` §9 explains the choice and its consequences.
+**Energy is measured differently on the two platforms, on purpose.** Each platform is measured with the finest instrument it offers: RAPL's per-core energy on x86-64, and on the board the INA260, which sees the whole module and gives the energy a backend draws above idle. The rankings of the backends agree across platforms; the joules cannot be compared. The selection is not affected, because `synthesize` compares backends only with each other, on one machine. `LOGBOOK.md` §7 explains the choice and its consequences.
 
 **Energy differences below ~1% are not resolved on the board.** A single measurement varies by 1–3%. Backends further apart than that rank consistently; `enc_s02_n01` and `enc_s02_n02`, 0.1% apart, alternate between runs, which is the honest answer of the sensor.
 
@@ -368,7 +370,7 @@ The new backend stays in use until the container restarts. To go back to the ini
 
 **The test certificate is not verified.** The server presents a self-signed certificate (`certs/certfile.crt`, valid until 18 January 2027), and the client does not check it. Its expiry will not break transfers, but the client does not authenticate the server either.
 
-**Two weaknesses inherited from upstream, left open.** Neither affects normal operation. `./send` accepts a mode of the wrong security level: `./send 5545 98` puts the low-level port on an AES-256 backend, and every transfer on it breaks; `./synthesize` never does this. And the server writes decrypted data as it arrives and checks the authentication tag only at the end: on a mismatch it keeps the file and does not tell the client. `LOGBOOK.md` §10 describes both and how they could be closed.
+**Two weaknesses inherited from upstream, left open.** Neither affects normal operation. `./send` accepts a mode of the wrong security level: `./send 5545 98` puts the low-level port on an AES-256 backend, and every transfer on it breaks; `./synthesize` never does this. And the server writes decrypted data as it arrives and checks the authentication tag only at the end: on a mismatch it keeps the file and does not tell the client. `LOGBOOK.md` §8 describes both and how they could be closed.
 
 ---
 
@@ -378,7 +380,7 @@ On aarch64 the container builds on [`al3monni/kria-ubuntu:22.04.5`](https://hub.
 
 Stock `ubuntu:22.04` is the same distribution but not the same userspace: AMD's Kria image carries board-specific tooling, such as `xmutil` and the platform-statistics utilities. Building on a frozen snapshot also means the toolchain does not depend on what happens to be installed on the board at build time.
 
-Nothing about the application is baked into that snapshot: every build step lives in the tracked `Dockerfile`. The procedure for regenerating and republishing the image, including the exclusion mistakes that are easy to make, is in [`LOGBOOK.md`](LOGBOOK.md) §12.
+Nothing about the application is baked into that snapshot: every build step lives in the tracked `Dockerfile`. The procedure for regenerating and republishing the image, including the exclusion mistakes that are easy to make, is in [`LOGBOOK.md`](LOGBOOK.md) §10.
 
 ---
 

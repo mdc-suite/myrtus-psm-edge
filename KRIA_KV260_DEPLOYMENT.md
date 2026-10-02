@@ -127,7 +127,7 @@ ssh ubuntu@192.168.137.50
 
 ## 6. Install Docker
 
-> If you intend to regenerate the project's base image from this board, take the rootfs snapshot **now, before installing Docker**. See [`LOGBOOK.md`](LOGBOOK.md) §12 — a board with Docker already running carries an image store that would otherwise end up inside the snapshot.
+> If you intend to regenerate the project's base image from this board, take the rootfs snapshot **now, before installing Docker**. See [`LOGBOOK.md`](LOGBOOK.md) §10 — a board with Docker already running carries an image store that would otherwise end up inside the snapshot.
 
 ```bash
 curl -fsSL https://get.docker.com | sudo sh
@@ -150,7 +150,7 @@ If you get `permission denied while trying to connect to the Docker API`, the se
 
 The board only clones and pulls; it never pushes. What it needs depends on the repository's visibility:
 
-- **Public repository:** nothing. Clone over HTTPS, as in §8.
+- **Public repository:** nothing. Clone over HTTPS, as in the README (*Build and run*, step 3).
 - **Private repository:** give the board a key with **read-only** access to this repository alone, i.e. a *deploy key*.
 
 To create the key on the board:
@@ -192,6 +192,12 @@ sudo xmutil xlnx_platformstats -p                                      # "SOM to
 The subcommand is `xlnx_platformstats`, not `platformstats`; the latter exists in older documentation and is rejected by the version on this image. The `hwmonN` index changes across boots, so the code looks the device up by name and you should too.
 
 The container reads the same sysfs path directly, which works because `compose-server.yml` runs it privileged. Nothing needs to be bind-mounted.
+
+The two backends that use the processor's AES instructions, f7 and f8, need the ARMv8 Crypto Extensions. Check that they are there rather than assume it:
+
+```bash
+grep -o 'aes\|pmull\|sha1\|sha2' /proc/cpuinfo | sort -u     # expect aes, pmull, sha1, sha2
+```
 
 For measurement campaigns the board should be otherwise idle. The timers that wake up on their own are worth stopping first, and re-enabling afterwards:
 

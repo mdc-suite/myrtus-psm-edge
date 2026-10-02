@@ -8,7 +8,7 @@ This logbook records the modifications that took **spdocker** from an x86-only p
 | **Upstream** | https://github.com/subhadeep-banik/spdocker, by Subhadeep Banik |
 | **Target hardware** | Kria KV260 — Zynq UltraScale+ MPSoC, 4× Cortex-A53, aarch64, Ubuntu 22.04 IoT |
 | **Hosts** | the board itself (native aarch64 build) · bare-metal x86-64 Linux (native amd64 build) |
-| **Base image** | [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu) on aarch64, `ubuntu:22.04` on x86-64, chosen automatically (§12) |
+| **Base image** | [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu) on aarch64, `ubuntu:22.04` on x86-64, chosen automatically (§10) |
 | **Status** | ✅ Validated on both architectures at `c0c0065`: eight backends registered and measured, byte-identical transfers on both security levels for files of every size, runtime switch working |
 
 ### How to read the modifications
@@ -29,20 +29,18 @@ Architecture tags: `arm` (aarch64 only), `x86` (x86-64 only), `both`.
 2. [What was broken](#2-what-was-broken)
 3. [Baseline: making upstream run at all](#3-baseline-making-upstream-run-at-all) — M1 … M3
 4. [Port modifications](#4-port-modifications) — M4 … M20
-5. [Host prerequisites](#5-host-prerequisites)
-6. [Build and run](#6-build-and-run)
-7. [Verification](#7-verification)
-8. [Selection mechanism and implementation map](#8-selection-mechanism-and-implementation-map)
-9. [Energy measurement](#9-energy-measurement)
-10. [Status: resolved and open points](#10-status-resolved-and-open-points)
-11. [Commit map](#11-commit-map)
-12. [Base image](#12-base-image)
+5. [Verification](#5-verification)
+6. [Selection mechanism and implementation map](#6-selection-mechanism-and-implementation-map)
+7. [Energy measurement](#7-energy-measurement)
+8. [Status: resolved and open points](#8-status-resolved-and-open-points)
+9. [Commit map](#9-commit-map)
+10. [Base image](#10-base-image)
 
 ---
 
 ## 1. What this project is
 
-A TLS client/server that ships **eight interchangeable AES implementations**. At runtime the server selects one, loads it from a shared library via `dlopen`/`dlsym`, and uses it for the authenticated encryption of file transfers. The selection is driven by measured time and energy, against a policy given to `synthesize` (§8).
+A TLS client/server that ships **eight interchangeable AES implementations**. At runtime the server selects one, loads it from a shared library via `dlopen`/`dlsym`, and uses it for the authenticated encryption of file transfers. The selection is driven by measured time and energy, against a policy given to `synthesize` (§6).
 
 As the **Privacy and Security Manager** of the MYRTUS edge layer, the component demonstrates *crypto-agility*: the cipher implementation behind a secure channel is not fixed at compile time but chosen at runtime, so the security/performance/energy trade-off can be renegotiated as conditions on the node change.
 
@@ -56,7 +54,7 @@ reset  →  register ×8  →  gcc -shared ./LIB/*.o -o ./LIB/lib_enc.so  →  .
 - `register -c ./fN/config.txt` compiles backend `fN`, runs a known-answer test (KAT), measures its time and energy, gives it a unique symbol name and drops `enc_sXX_nYY.o` into `LIB/`
 - `server` opens `./LIB/lib_enc.so` and resolves `enc_s%02d_n%02d` according to the mode byte
 
-The **registration order is the numbering**: it decides which `fN` a given mode byte selects. The client does not depend on it, since it never loads `lib_enc.so`; everything that names a backend by number does (§8).
+The **registration order is the numbering**: it decides which `fN` a given mode byte selects. The client does not depend on it, since it never loads `lib_enc.so`; everything that names a backend by number does (§6).
 
 ---
 
@@ -123,7 +121,7 @@ Grouped by theme; within each theme the most important come first. Paths are the
 > [!IMPORTANT]
 > The same `docker compose … up --build` works on the board and on x86-64, with no argument. The Dockerfile picks the base image from the architecture it is building for, and compose builds for the host.
 
-**`Dockerfile`.** The base image on the board is a snapshot of the board's own root filesystem (§12), which exists only for arm64: on x86-64 every `RUN` would fail with `exec format error`. The base is therefore chosen from `TARGETARCH`, which BuildKit sets to the architecture being built, with one stage per architecture:
+**`Dockerfile`.** The base image on the board is a snapshot of the board's own root filesystem (§10), which exists only for arm64: on x86-64 every `RUN` would fail with `exec format error`. The base is therefore chosen from `TARGETARCH`, which BuildKit sets to the architecture being built, with one stage per architecture:
 
 ```dockerfile
 ARG TARGETARCH
@@ -153,7 +151,7 @@ likwid's build ties compiler and architecture together: its default `COMPILER = 
 | `ACCESSMODE` | `perf_event` | the Linux interface to the ARM performance counters; the default access daemon is x86-only |
 | `BUILDDAEMON`, `BUILDFREQ` | `false` | the MSR access daemon and the frequency daemon, which the ARM build does not need |
 
-On ARM likwid can read the performance counters (cycles, instructions, caches) but no energy: that is why the board measures energy through the INA260 (M12, §9).
+On ARM likwid can read the performance counters (cycles, instructions, caches) but no energy: that is why the board measures energy through the INA260 (M12, §7).
 
 <details>
 <summary>🟢 <b>M6 · Build likwid before copying the sources</b> — <code>both</code> · <code>Dockerfile</code> · <code>d01abde</code></summary>
@@ -172,7 +170,7 @@ The Dockerfile installed `gcc` alone, which brings the compiler without the C li
 <details>
 <summary>🟢 <b>M19 · Build likwid on x86-64 only</b> — <code>arm</code> · <code>Dockerfile</code> · <code>52c6544</code></summary>
 
-Since M12 the board measures energy through the INA260, and `profile01.c` calls `likwid-perfctr` only on x86-64; on aarch64 likwid was downloaded and compiled (M5) but never run. The Dockerfile now builds it only when the target is not `arm64`. This takes about 370 s (M6) off a clean build on the board, and with them its dependence on likwid's download server; the x86-64 build is unchanged. Checked with a clean build on both architectures (§6a): on the board the step now takes 1.4 s, on x86-64 it builds likwid as before, and `test/test.sh -all` passes on both, with energy on x86-64 still measured through likwid.
+Since M12 the board measures energy through the INA260, and `profile01.c` calls `likwid-perfctr` only on x86-64; on aarch64 likwid was downloaded and compiled (M5) but never run. The Dockerfile now builds it only when the target is not `arm64`. This takes about 370 s (M6) off a clean build on the board, and with them its dependence on likwid's download server; the x86-64 build is unchanged. Checked with a clean build on both architectures: on the board the step now takes 1.4 s, on x86-64 it builds likwid as before, and `test/test.sh -all` passes on both, with energy on x86-64 still measured through likwid.
 
 </details>
 
@@ -181,7 +179,7 @@ Since M12 the board measures energy through the INA260, and `profile01.c` calls 
 #### 🟡 M8 · A failed measurement no longer destroys the registration state
 `both` · `src/gen.c` · `af69ca9`, `7debc15`
 
-`header.h` is the registration manifest: for each security level it holds the number of registered backends, and for each backend its prototype. `gen.c` writes the updated version to `header1.h` and then replaces the old one. Upstream bumped the counter only if the measurement succeeded (`if (!rt)`), but ran `rm header.h; mv header1.h header.h` **unconditionally**. A failed measurement therefore replaced the manifest with an incomplete file and wiped the registration state. This surfaced on aarch64, where the first measurements could not work at all (§9).
+`header.h` is the registration manifest: for each security level it holds the number of registered backends, and for each backend its prototype. `gen.c` writes the updated version to `header1.h` and then replaces the old one. Upstream bumped the counter only if the measurement succeeded (`if (!rt)`), but ran `rm header.h; mv header1.h header.h` **unconditionally**. A failed measurement therefore replaced the manifest with an incomplete file and wiped the registration state. This surfaced on aarch64, where the first measurements could not work at all (§7).
 
 Now the replacement happens only when the measurement succeeds. On failure `gen.c` discards `header1.h`, removes the half-registered object from `LIB/` and says so:
 
@@ -230,7 +228,7 @@ The round keys therefore shift by one position relative to the x86 code. A versi
 
 **The silent clash that followed.** With the rewrite, f7 and f8 passed their tests in isolation but vanished from a full registration: `register` exited with 0, yet `LIB/` held six objects instead of eight. The C key expansion had brought in two global tables, `sbox` and `Rcon`, with the same names as tables already registered by f1 and f4. `register` checks for clashes with `nm --defined-only`, which lists local symbols too (`static` does not hide them), and on a clash it skips the backend without an error. The tables were renamed per backend (`f7_sbox`, `f7_rcon`, `f8_sbox`, `f8_rcon`).
 
-The lesson applies to the whole pipeline: a zero exit status and a passing test are not enough, and the only reliable check is the number of objects in `LIB/` (§7).
+The lesson applies to the whole pipeline: a zero exit status and a passing test are not enough, and the only reliable check is the number of objects in `LIB/` (§5).
 
 **Validated:** both known-answer tests pass bit-identical on the Cortex-A53; a full registration produces eight objects, with counters `///1-04` and `///2-04`.
 
@@ -285,7 +283,7 @@ endif
 - *Estimator:* each window's level is the median of its 250 ms block means. A burst from another process spoils a few blocks without moving the median, and averaging within blocks keeps a resolution well below the sensor's 10 mW step.
 - *Quality gate:* a measurement is accepted only if the two baselines, and the two halves of the run, agree within 15 mW; otherwise it is repeated, up to three times. Every attempt is logged in `power.csv`, next to `db.yaml`.
 
-**Validation.** Before the protocol was used for selection, an 8-hour unattended campaign (283 measurements per backend) checked that its figures can be trusted: one measurement varies by 1–3% on energy, the differences between backends are real down to about 1%, temperature plays no role, and figures taken during a normal registration match isolated ones within 2.3%. The limits this leaves are discussed in §9.
+**Validation.** Before the protocol was used for selection, an 8-hour unattended campaign (283 measurements per backend) checked that its figures can be trusted: one measurement varies by 1–3% on energy, the differences between backends are real down to about 1%, temperature plays no role, and figures taken during a normal registration match isolated ones within 2.3%. The limits this leaves are discussed in §7.
 
 > [!WARNING]
 > **Do not poll the container while it measures.** A harness running `docker exec` every 5 s biased every measurement about 30% low: bursts in the baselines pass the gate and inflate the subtracted idle, while bursts in the run are rejected. `tools/bench_ina260.sh` waits by following the container log instead.
@@ -297,7 +295,16 @@ endif
 
 On a bare-metal host with Secure Boot on, the container stopped at `Registering Implementation in ./f1` forever. The kernel's lockdown refuses the MSR writes likwid needs, and when likwid then fails to *start* its counters it exits without killing the program it had forked and paused (likwid 5.5.1). The paused child keeps the output pipe open, and `profile01.c` waits on it forever. Next to it sat a second defect: when likwid failed *before* forking, `profile` wrote a time and an energy of zero and the backend registered as if it had been measured.
 
-`profile01.c` now runs a short probe first (`likwid-perfctr -g ENERGY -S 100ms`, which forks nothing and fails cleanly), and refuses to register a backend whose time or energy is not positive. Either way `gen.c` leaves it unregistered (M8). The Secure Boot setting itself is a host prerequisite (§5b). **Validated:** a normal registration is unchanged; with the `msr` module unloaded, registering f1 fails in seconds with an explicit message, and `header.h` and `db.yaml` stay untouched.
+`profile01.c` now runs a short probe first (`likwid-perfctr -g ENERGY -S 100ms`, which forks nothing and fails cleanly), and refuses to register a backend whose time or energy is not positive. Either way `gen.c` leaves it unregistered (M8). The Secure Boot setting itself is a host prerequisite (README, *Build and run*, step 1). **Validated:** a normal registration is unchanged; with the `msr` module unloaded, registering f1 fails in seconds with an explicit message, and `header.h` and `db.yaml` stay untouched.
+
+When no backend registers on x86-64, this checks from inside the container, without a full start, whether likwid can read the energy registers:
+
+```bash
+docker compose -f compose-server.yml run --rm --entrypoint sh ssl-server \
+  -c 'likwid-perfctr -f -g ENERGY -C 0 -S 1s'
+```
+
+The output must end with `Energy Core [J]` and `Energy PKG [J]` values. On AMD processors the kernel also exposes RAPL, under the name `intel-rapl`; likwid 5.5.1 recognises Zen+ (`AMD K17 (Zen+) architecture`).
 
 ### 4.5 Runtime
 
@@ -321,13 +328,13 @@ mode = (port == 5544) ? 0x62 : 0x52;   /* enc_s02_n02 / enc_s01_n02 */
 
 Port 5544 keeps upstream's default; 5545 starts on its AES-128 counterpart, `enc_s01_n02` (f2). `send` and `synthesize` work as before.
 
-**Validated:** both levels byte-identical on both architectures without any `send`; the log reads `Starting with enc_s02_n02` on 5544 and `Starting with enc_s01_n02` on 5545. Two related upstream weaknesses remain open (§10).
+**Validated:** both levels byte-identical on both architectures without any `send`; the log reads `Starting with enc_s02_n02` on 5544 and `Starting with enc_s01_n02` on 5545. Two related upstream weaknesses remain open (§8).
 
 <details>
 <summary>🟢 <b>M15 · Restore the round-trip input and create <code>Downloads/</code> at start</b> — <code>both</code> · <code>test/rfile</code>, <code>src/start.sh</code> · <code>f44d204</code>, <code>a7fc710</code></summary>
 
 A clean-up of leftovers (`fec03c9`) also removed two things the runtime needs:
-- **`rfile`**, the 10000-byte input of the round-trip test (§7), restored from history;
+- **`rfile`**, the 10000-byte input of the round-trip test (§5), restored from history;
 - **`Downloads/`**, where the server saves every received file. The server never creates it, and the directory existed only because a file inside it was tracked; without it every transfer was lost silently. `start.sh` now runs `mkdir -p Downloads` before starting the server.
 
 </details>
@@ -390,105 +397,7 @@ The client sends the ciphertext in 1024-byte records, followed by the 16-byte ta
 
 ---
 
-## 5. Host prerequisites
-
-The component builds and runs natively in two places: on the board (§5a) and on a bare-metal x86-64 host (§5b). Both use the same source tree and the same compose file.
-
-### 5a. Kria KV260
-
-Board bring-up (flashing, serial console, networking, Docker) is described step by step in [`KRIA_KV260_DEPLOYMENT.md`](KRIA_KV260_DEPLOYMENT.md). Before building:
-
-1. **Ubuntu 22.04 IoT** flashed to the microSD and booted. balenaEtcher's streaming decompression fails on the `.xz` image: decompress it first with `unxz -kv`, then flash the raw `.img`.
-2. **Docker Engine** installed on the board.
-3. **User in the `docker` group.** After `usermod -aG docker $USER` the new group does not apply to the current login: reconnect over SSH, or use `sudo` until you do.
-4. **AES instructions present**, checked rather than assumed:
-
-```bash
-grep -o 'aes\|pmull\|sha1\|sha2' /proc/cpuinfo | sort -u
-```
-
-All four must appear, or f7 and f8 (M10) have no instructions to compile against.
-
-5. **Space on the microSD.** The base image (§12) is about 2 GB compressed and several more unpacked, before the application layers.
-
-### 5b. x86-64, bare metal
-
-Bare metal is required to run the component on x86-64 at all: registration measures every backend and refuses one it cannot measure (M13), and WSL2, Docker Desktop and virtual machines expose no RAPL registers. In such environments the image builds, but no backend registers.
-
-1. **Bare-metal Linux.** A dual boot or a spare machine is enough; a live USB without persistence loses Docker and the image at every reboot.
-2. **Docker Engine** and the compose plugin (`docker.io`, `docker-compose-v2`), with the user in the `docker` group. On GNOME, logging out may not apply the new group; a reboot does.
-3. **Secure Boot disabled.** With Secure Boot on, the kernel is in lockdown and refuses raw MSR access (M13). Check:
-
-```bash
-mokutil --sb-state                       # SecureBoot disabled
-cat /sys/kernel/security/lockdown        # [none] integrity confidentiality
-```
-
-On a machine that dual-boots Windows with BitLocker or device encryption, have the recovery key ready before changing the setting: Windows will ask for it at the next boot.
-
-4. **The `msr` module loaded**, after every boot:
-
-```bash
-sudo modprobe msr && ls /dev/cpu/0/msr
-```
-
-To load it at boot instead: `echo msr | sudo tee /etc/modules-load.d/msr.conf`.
-
-5. **likwid reads the ENERGY group** from inside the container, before a full start:
-
-```bash
-docker compose -f compose-server.yml run --rm --entrypoint sh ssl-server \
-  -c 'likwid-perfctr -f -g ENERGY -C 0 -S 1s'
-```
-
-The output must end with `Energy Core [J]` and `Energy PKG [J]` values. On AMD processors the kernel also exposes RAPL, under the name `intel-rapl`; likwid 5.5.1 recognises Zen+ (`AMD K17 (Zen+) architecture`).
-
----
-
-## 6. Build and run
-
-The same steps on both architectures, after the prerequisites of §5. The README, *Build and run*, walks through them one by one.
-
-```bash
-git clone https://github.com/mdc-suite/myrtus-psm-edge.git
-cd myrtus-psm-edge
-sudo modprobe msr                                     # x86-64 only, after every boot (§5b)
-docker compose -f compose-server.yml up -d --build    # build, then start in the background
-docker logs -f Test-server                            # follow the start; Ctrl-C stops following, not the container
-test/test.sh -all                                     # §7
-docker compose -f compose-server.yml down             # stop and remove the container
-```
-
-The compose file sets `restart: unless-stopped`: the container comes back by itself after a reboot of the host or of Docker, until it is stopped with `down`, which returns at once since M20.
-
-### 6a. Build time
-
-Measured on 2 October 2026, at `d83cf3c`:
-
-| Step | Kria KV260 | x86-64 (Ryzen 5 3500U) |
-|---|---|---|
-| Base image: download | 107 s (2.07 GB) | already present (30 MB) |
-| Base image: unpack | 440 s | |
-| Packages (`apt-get`) | 318 s | 60 s |
-| likwid | not built: 1.4 s (M19) | 81 s |
-| Component (`gcc`, `make`) | ~20 s | ~3 s |
-| Export of the image | 77 s | 27 s |
-| **Total** | **969 s, ~16 min** | **173 s, ~3 min** |
-
-On the board the build started from an empty Docker (`docker system prune -a`): unpacking the base image onto the microSD is the longest step. On x86-64 it was `docker compose build --no-cache` with the base image already present; downloading `ubuntu:22.04` adds a few seconds. The packages depend on the network, which on the board goes through Windows ICS. Later builds reuse the cached layers and restart from the copy of the sources, in seconds (M6).
-
-### 6b. What a successful start looks like
-
-- `Registering Implementation in ./f1 … ./f8`, then `Done`
-- `Creating Shared Library lib_enc.so` with **no `ld` error** below it
-- `platform: debian-arm64` on the board, `platform: debian-amd64` on x86-64
-- **no** `Error setting socket opts: Operation not permitted`: that means the container was not started privileged, i.e. not through compose
-
-`Registering Implementation in ./fN` is printed whatever happens, because `start.sh` discards the output of each registration. Whether all eight registered is checked in §7, not read from the log.
-
----
-
-## 7. Verification
+## 5. Verification
 
 Run these against a container that has finished its start pipeline. `test/test.sh` runs them on the target and reports, for each, the command, the expected and the obtained result (README, *Tests*): with no option the build checks and the round trip, with `-rapid` the build checks only, with `-all` also the runtime switch and the file sizes of M17 and M18. The commands below are the same checks by hand.
 
@@ -536,7 +445,7 @@ Expected, for each level: `Entire File Sent 10016 bytes` (10000 bytes of payload
 Three things to know about this test:
 - **`-s` accepts only `0` and `1`.** Any other value leaves the client without a cipher, and the server reports `TAG MISMATCH`.
 - **Run the transfers one at a time.** The server saves each file as `Downloads/filename-ekm<N>`, with `<N>` drawn from `rand()`. The two server processes seed it in the same second and draw the same sequence of names, so simultaneous transfers on the two ports can end up in the same file.
-- **Only `cmp` counts.** `Entire File Sent` says nothing about what the server did with the data, the server's own "Received N bytes" line leaves out the last partial chunk, and the server keeps a file even when its tag does not verify (§10).
+- **Only `cmp` counts.** `Entire File Sent` says nothing about what the server did with the data, the server's own "Received N bytes" line leaves out the last partial chunk, and the server keeps a file even when its tag does not verify (§8).
 
 ### Reference results
 
@@ -554,11 +463,11 @@ Three things to know about this test:
 | File sizes (18 sizes from 0 B to 1 MiB, both levels, backends and OpenSSL GCM) | 72 transfers identical, no `TAG MISMATCH` | ✅ since M17, M18 | ✅ since M17, M18 |
 | AES instructions in `/proc/cpuinfo` | `aes pmull sha1 sha2` | ✅ | n/a |
 
-The x86-64 column was validated on an AMD Ryzen 5 3500U (Zen+) with the prerequisites of §5b. The commands of the runtime-switch test are in the README, under *Tests*.
+The x86-64 column was validated on an AMD Ryzen 5 3500U (Zen+) with the prerequisites of the README (*Build and run*, step 1). The commands of the runtime-switch test are in the README, under *Tests*.
 
 ---
 
-## 8. Selection mechanism and implementation map
+## 6. Selection mechanism and implementation map
 
 One byte, the **mode**, encodes the choice: two bits of function class, two of security level, four of implementation index. `synthesize` sets the class (`01`, encryption); the server reads only the level and the index (`encrypt02.c`):
 
@@ -585,7 +494,7 @@ Because all the backends of a level compute the same function, any of them works
 
 `synthesize -f e -s <level> -t <0|1|2> -e <0|1|2>` reads `db.yaml`, keeps the backends of that level, normalises their time and energy between minimum and maximum, and picks the one closest to the requested point (0 = minimum, 1 = middle, 2 = maximum). It then calls `./send <5544 + 2 − level> <64 + 16·level + index>`. `send` finds the process listening on that port with `lsof` and sends it `SIGUSR1` carrying the value, which the signal handler writes into `mode`.
 
-Port and level come from the same number, so `synthesize` never selects across levels; a `send` issued by hand can (§10). Nothing runs `synthesize` automatically: today the selection is a manual step.
+Port and level come from the same number, so `synthesize` never selects across levels; a `send` issued by hand can (§8). Nothing runs `synthesize` automatically: today the selection is a manual step.
 
 With real measurements in `db.yaml` (M12), all four backends of each level are reachable: `n04` at `-t 0 -e 0` and `n03` at `-t 2 -e 2`. The off-diagonal policies ("fast but expensive") are physically contradictory on the board, where energy is time multiplied by a nearly constant power; `synthesize` then returns the nearest point, `n01` or `n02`, which sit within ~5% of each other.
 
@@ -608,11 +517,11 @@ Registration order **is** the numbering, so this table is a contract, not a desc
 
 Eight implementations whose internal function names were originally identical can share one library because `gen.c` wraps each of them: `#define <fn> enc_sXX_nYY`, `#include` of the source, `gcc -E -P` into a fully preprocessed `source.c`, and the renamed object goes into `LIB/`. Global tables survive preprocessing untouched, which is why f7 and f8 needed their own table names (M10).
 
-On the board, f7 and f8 are the two backends that use the A53's AES instructions; the other six are portable C. That split is exactly what the energy measurement (§9) makes visible.
+On the board, f7 and f8 are the two backends that use the A53's AES instructions; the other six are portable C. That split is exactly what the energy measurement (§7) makes visible.
 
 ---
 
-## 9. Energy measurement
+## 7. Energy measurement
 
 **The principle: every platform is measured with the finest instrument it offers.** This is a deliberate choice, not a compromise waiting for a fix. The two platforms offer different instruments, so they measure different quantities.
 
@@ -637,7 +546,7 @@ These follow from the choice and from the hardware; they are properties of the m
 
 ---
 
-## 10. Status: resolved and open points
+## 8. Status: resolved and open points
 
 ### Resolved by the port
 
@@ -646,7 +555,7 @@ These follow from the choice and from the hardware; they are properties of the m
 - **f7 and f8 are complete on both architectures**, with the processor's AES instructions on each (M10, M11), and no longer disappear silently from the registration (M10).
 - **A failed measurement no longer wipes the registration state** (M8).
 - **Energy is measured on the board**, through the INA260, and drives the selection: before, the selection was stuck on one backend (M12).
-- **x86-64 runs on bare metal** with the same build command as the board, and measures energy through RAPL (M4, §5b).
+- **x86-64 runs on bare metal** with the same build command as the board, and measures energy through RAPL (M4).
 - **The low security level is no longer corrupted** (M14).
 - **The x86 measurement no longer hangs** when likwid cannot start its counters, and no longer registers zeros when it cannot measure (M13).
 - **The round-trip test and the received-files directory are back** (M15).
@@ -661,14 +570,14 @@ All secondary: none affects normal operation.
 1. **Small upstream fixes.**
    - `register.c`: initialise `bool rval = 0;`; return a non-zero status when `collide()` refuses a backend, so a skipped backend is not reported as a success (M10); check that the `check%d.c` template exists *before* opening `test%d.c` for writing (§2a).
    - `start.sh`: keep the standard error of `register` instead of discarding it, so a refused registration, M13's messages included, reaches the container log.
-   - `cltest.c`: reject any `-s` other than `0` and `1` (§7).
-2. **`send` accepts a mode of the wrong level.** The signal handler writes any value into `mode`: `./send 5545 98` moves the low-level port to an AES-256 backend and reproduces exactly the failure M14 removed. `synthesize` never does this (§8). The handler could refuse a mode whose level does not match its port; that needs the port's level in a global, since `port` is local to `createserver`.
+   - `cltest.c`: reject any `-s` other than `0` and `1` (§5).
+2. **`send` accepts a mode of the wrong level.** The signal handler writes any value into `mode`: `./send 5545 98` moves the low-level port to an AES-256 backend and reproduces exactly the failure M14 removed. `synthesize` never does this (§6). The handler could refuse a mode whose level does not match its port; that needs the port's level in a global, since `port` is local to `createserver`.
 3. **Decrypted data is written before the tag is checked.** The server decrypts chunk by chunk and writes each one as it goes; the authentication tag is verified only at the end, in `dec_final` (by OpenSSL in mode 0). On a mismatch it prints `TAG MISMATCH`, keeps the file, and does not tell the client. With the right level (M14) the tag verifies and the file is correct, but an authenticated cipher should never release data it has not authenticated. Writing to a temporary name and renaming only after a successful `dec_final`, or deleting the file on a mismatch, would close it.
 4. **Test certificate.** `certs/certfile.crt` is self-signed and valid until 18 January 2027. The client does not verify it, so its expiry will not break transfers, but the client does not authenticate the server either. The fix is a certificate the client actually checks; renewing this one only moves the date.
 
 ---
 
-## 11. Commit map
+## 9. Commit map
 
 Each modification with the commits that implement it. `git log --oneline main` gives the full chronological history.
 
@@ -695,11 +604,11 @@ Each modification with the commits that implement it. `git log --oneline main` g
 | 🟡 M18 · OpenSSL path (mode 0) | `7440efc` |
 | 🟢 M19 · likwid on x86-64 only | `52c6544` |
 | 🟢 M20 · Stop at once (`init: true`) | `6890ce2` |
-| Base image snapshot (§12) | `66baa82` |
+| Base image snapshot (§10) | `66baa82` |
 
 ---
 
-## 12. Base image
+## 10. Base image
 
 On aarch64 the container is built on **[`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu)**, a snapshot of the board's own root filesystem published on Docker Hub (`linux/arm64/v8`, ~2 GB compressed). On x86-64 it is built on stock `ubuntu:22.04`, the same release. The Dockerfile chooses between them from the architecture being built (M4).
 
