@@ -116,25 +116,6 @@ This is the crypto-agility itself:
 
 Nothing runs `synthesize` automatically: today the selection is a manual step.
 
-### What lives where
-
-| Path | Contents |
-|---|---|
-| `src/start.sh` | the container entrypoint: the pipeline of §1 |
-| `src/reset.c`, `src/register.c`, `src/gen.c` | registration (§2) |
-| `src/check1.c`, `src/check2.c` | the known-answer test templates, AES-128 and AES-256 |
-| `src/profile01.c`, `src/internalprofile.c`, `src/ina260.h` | measurement: likwid and RAPL on x86-64, the INA260 on the board |
-| `src/server_f.c`, `src/cltest.c`, `src/Makefile`, `src/makeclient` | server and client, and their build (§3, §4) |
-| `src/encrypt02.c` | the GCM mode around the selected backend, and the mode decoding |
-| `src/synthesize.c`, `src/send.c` | backend selection and delivery of the new mode (§5) |
-| `backends/f1` … `backends/f8` | the eight AES backends, one directory each, with their own Makefile and `config.txt` |
-| `certs/` | the server's self-signed test certificate and its key |
-| `test/test.sh`, `test/rfile` | the test script, run on the host (see *Tests*), and the 10000-byte input of the round-trip test |
-| `tools/` | `bench_ina260.sh`, unattended measurement campaigns on the board, and `ina260_test.c`, a check of the power sensor |
-| `Dockerfile`, `compose-server.yml` | image definition and orchestration |
-
-Inside the container everything is flat in `/app`: the Dockerfile copies `src/`, `backends/`, `certs/`, `test/rfile` and `tools/ina260_test.c` there, so `backends/f1` becomes `/app/f1` and `test/rfile` becomes `/app/rfile`. `LIB/`, `header.h`, `db.yaml` and `Downloads/` are created at runtime and are never committed. Every path in the commands below is a path in the container.
-
 ---
 
 ## Requirements
