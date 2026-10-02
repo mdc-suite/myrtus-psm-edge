@@ -477,7 +477,7 @@ The compose file sets `restart: unless-stopped`: a detached container comes back
 
 ## 7. Verification
 
-Run these against a container that has finished its start pipeline.
+Run these against a container that has finished its start pipeline. `test/test.sh` runs them from the host and reports, for each, the command, the expected and the obtained result (README, *Tests*): with no option the build checks and the round trip, with `-rapid` the build checks only, with `-all` also the runtime switch and the file sizes of M17 and M18. The commands below are the same checks by hand.
 
 > [!NOTE]
 > Compose calls the service `ssl-server`, and the container it creates is `Test-server`. `docker compose` subcommands take the service name; `docker exec` and `docker logs` take the container name. Mixing them up gives a "no such service/container" error.
@@ -538,6 +538,7 @@ Three things to know about this test:
 | Round trip, high (`-s 1`, 5544) | `10016 bytes`, `cmp` identical | ✅ | ✅ |
 | Round trip, low (`-s 0`, 5545) | `10016 bytes`, `cmp` identical | ✅ since M14 | ✅ since M14 |
 | Runtime switch (`synthesize -s 1 -t 0 -e 0`, then a transfer on 5545) | `Switching to enc_s01_n04`, `Starting with enc_s01_n04`, `cmp` identical | ✅ | ✅ |
+| File sizes (18 sizes from 0 B to 1 MiB, both levels, backends and OpenSSL GCM) | 72 transfers identical, no `TAG MISMATCH` | ✅ since M17, M18 | ✅ since M17, M18 |
 | AES instructions in `/proc/cpuinfo` | `aes pmull sha1 sha2` | ✅ | n/a |
 
 The x86-64 column was validated on an AMD Ryzen 5 3500U (Zen+) with the prerequisites of §5b. The commands of the runtime-switch test are in the README, under *Tests*.

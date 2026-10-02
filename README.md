@@ -130,7 +130,7 @@ Nothing runs `synthesize` automatically: today the selection is a manual step.
 | `src/synthesize.c`, `src/send.c` | backend selection and delivery of the new mode (§5) |
 | `backends/f1` … `backends/f8` | the eight AES backends, one directory each, with their own Makefile and `config.txt` |
 | `certs/` | the server's self-signed test certificate and its key |
-| `test/rfile` | the 10000-byte input of the round-trip test |
+| `test/test.sh`, `test/rfile` | the test script, run on the host (see *Tests*), and the 10000-byte input of the round-trip test |
 | `tools/` | `bench_ina260.sh`, unattended measurement campaigns on the board, and `ina260_test.c`, a check of the power sensor |
 | `Dockerfile`, `compose-server.yml` | image definition and orchestration |
 
@@ -203,7 +203,7 @@ The `Registering Implementation` lines are printed whatever happens, because `st
 
 ## Tests
 
-There are three layers of tests: the ones the pipeline runs by itself at every start, the checks you run once the container is up, and the end-to-end tests of transfers and backend switching.
+There are three layers of tests: the ones the pipeline runs by itself at every start, the checks you run once the container is up, and the end-to-end tests of transfers and backend switching. `test/test.sh` runs the last two for you.
 
 > [!NOTE]
 > Compose calls the service `ssl-server`, and the container it creates is `Test-server`. `docker compose` subcommands take the service name; `docker exec` and `docker logs` take the container name.
@@ -218,6 +218,30 @@ There are three layers of tests: the ones the pipeline runs by itself at every s
 | Quality gate (board only) | `profile01.c`, per measurement | the idle baselines or the two halves of the run disagree by more than 15 mW: the measurement is repeated, up to three times, and the cleanest attempt is kept |
 
 A failure in any of them removes one backend and nothing else, silently. The checks below are how you notice.
+
+### Running the checks: `test/test.sh`
+
+Once the container has started (the log shows the OpenSSL banner), run the script from the repository, on the host, in another terminal:
+
+```bash
+test/test.sh          # the build checks (1-6 below) and the round trip on both levels
+test/test.sh -rapid   # the build checks only
+test/test.sh -all     # everything: also the runtime switch and the file sizes
+```
+
+For each test it prints the command it runs in the container, the expected and the obtained result, and `PASS` or `FAIL`; a summary closes the run.
+
+```
+[3/8] Symbols exported by lib_enc.so
+      command:  nm -D LIB/lib_enc.so | awk '$2 == "T" && $3 ~ /^enc_s/ { print $3 }' | xargs
+      expected: enc_s01_n01 enc_s01_n02 enc_s01_n03 enc_s01_n04 enc_s02_n01 enc_s02_n02 enc_s02_n03 enc_s02_n04
+      obtained: enc_s01_n01 enc_s01_n02 enc_s01_n03 enc_s01_n04 enc_s02_n01 enc_s02_n02 enc_s02_n03 enc_s02_n04
+      PASS
+```
+
+The exit status is `0` when every test passed, `1` when any failed, and `2` when the tests could not run: Docker unreachable, container stopped, or still registering its backends. Nothing is rebuilt or restarted, so the script can be run any number of times on the same container. `-all` switches backends while it runs and leaves both ports on their initial ones (`./send 5544 98`, `./send 5545 82`).
+
+The sections below are the same checks one by one, with the commands to run them by hand. A command printed by the script runs in the container as it is: `docker exec -it Test-server sh`, then `cd /app`.
 
 ### After the start
 
@@ -305,6 +329,10 @@ Expected:
 - the transfer is `IDENTICAL`, and the log reads `Starting with enc_s01_n04`.
 
 The new backend stays in use until the container restarts. To go back to the initial one without restarting: `docker exec Test-server sh -c 'cd /app && ./send 5545 82'`.
+
+### File sizes (`test/test.sh -all`)
+
+`rfile` exercises one size only. This test sends 18 files, from 0 bytes to 1 MiB and packed around the 1024-byte record boundaries, on both levels: first through the registered backends, then through OpenSSL's GCM (mode 0, selected with `./send <port> 0`). Expected, in each of the four runs: 18 of 18 files identical and no `TAG MISMATCH`, and in mode 0 every transfer decrypted by OpenSSL. It covers the two defects fixed in M17 and M18 (`LOGBOOK.md` §4.7), which `rfile`'s size does not trigger.
 
 ---
 
