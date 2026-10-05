@@ -8,7 +8,7 @@ Crypto-agile TLS prototype with eight runtime-selectable AES backends, running o
 | **Upstream** | https://github.com/subhadeep-banik/spdocker |
 | **Target hardware** | AMD/Xilinx Kria KV260 — Zynq UltraScale+ MPSoC, 4× Cortex-A53, aarch64, Ubuntu 22.04 IoT |
 | **Hosts** | the board itself (native aarch64 build) · bare-metal x86-64 Linux (native amd64 build) |
-| **Base image** | [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu) on aarch64, `ubuntu:22.04` on x86-64, chosen automatically |
+| **Base image** | `ubuntu:22.04` on both architectures |
 | **Status** | ✅ Validated on both architectures: eight backends registered and measured, byte-identical round trips on both security levels |
 
 > Derived from [spdocker](https://github.com/subhadeep-banik/spdocker) by Subhadeep Banik. Every modification made along the way, and why, is recorded in [`LOGBOOK.md`](LOGBOOK.md).
@@ -36,7 +36,7 @@ Each target builds the image for its own architecture, on the target itself. Ste
 
 ### 1. Prepare the target
 
-**Kria KV260.** Follow [`KRIA_KV260_DEPLOYMENT.md`](KRIA_KV260_DEPLOYMENT.md). It takes the board from an empty microSD card to Ubuntu 22.04 with network access, SSH and Docker, with your user in the `docker` group. Keep a few GB free on the card for the images.
+**Kria KV260.** Follow [`KRIA_KV260_DEPLOYMENT.md`](KRIA_KV260_DEPLOYMENT.md). It takes the board from an empty microSD card to Ubuntu 22.04 with network access, SSH and Docker, with your user in the `docker` group. Keep at least 1 GB free on the card for the image.
 
 **x86-64 PC.** Ubuntu 22.04 or later, installed natively, with:
 
@@ -46,10 +46,10 @@ Each target builds the image for its own architecture, on the target itself. Ste
 
 ### 2. Open a terminal on the target
 
-**Kria KV260.** From your PC, connect to the board with the address set during bring-up (§5 of the guide):
+**Kria KV260.** From your PC, connect to the board with the address you noted during bring-up (§5 of the guide):
 
 ```bash
-ssh ubuntu@192.168.137.50
+ssh ubuntu@<board-address>
 ```
 
 **x86-64 PC.** Open a terminal on it, directly or over SSH, and load the kernel module through which the energy registers are read. It is needed again after every reboot:
@@ -76,15 +76,13 @@ cd myrtus-psm-edge
 git pull
 ```
 
-If the repository is private, clone `git@github.com:mdc-suite/myrtus-psm-edge.git` instead, with an SSH key that has access to it. On the board this is the deploy key of §7 of the bring-up guide.
-
 ### 4. Build and start the container
 
 ```bash
 docker compose -f compose-server.yml up -d --build
 ```
 
-This builds the image, starts the container in the background and gives the prompt back. The first build takes about 16 minutes on the board, more than half of them to download and unpack the 2 GB base image, and about 3 minutes on x86-64. Later builds reuse what is already built and take seconds.
+This builds the image, starts the container in the background and gives the prompt back. The first build takes about 5 minutes on the board ([`BASEIMAGE.md`](BASEIMAGE.md)) and about 3 minutes on x86-64. Later builds reuse what is already built and take seconds.
 
 ### 5. Run the tests
 
@@ -393,11 +391,9 @@ The new backend stays in use until the container restarts. To go back to the ini
 
 ## Base image
 
-On aarch64 the container builds on [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu), a snapshot of a Kria board's own root filesystem published to Docker Hub (`linux/arm64/v8`, ~2 GB compressed). On x86-64 it builds on stock `ubuntu:22.04`, the same release. The Dockerfile picks the base from the build architecture; there is no argument to pass.
+The container builds on stock `ubuntu:22.04` on both architectures; there is no argument to pass.
 
-Stock `ubuntu:22.04` is the same distribution but not the same userspace: AMD's Kria image carries board-specific tooling, such as `xmutil` and the platform-statistics utilities. Building on a frozen snapshot also means the toolchain does not depend on what happens to be installed on the board at build time.
-
-Nothing about the application is baked into that snapshot: every build step lives in the tracked `Dockerfile`. The procedure for regenerating and republishing the image, including the exclusion mistakes that are easy to make, is in [`LOGBOOK.md`](LOGBOOK.md) §8.
+Until `2ac6d71`, the board used [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu), a snapshot of a Kria board's own root filesystem with AMD's tooling. The component needs none of that tooling: it reads the INA260 directly from `/sys/class/hwmon`, which the privileged container sees on any base. On stock Ubuntu the first start on the board takes 294 s instead of 932 s, and 0.82 GB of the card instead of 7.98 GB; [`BASEIMAGE.md`](BASEIMAGE.md) has the full comparison, and [`LOGBOOK.md`](LOGBOOK.md) §8 describes the snapshot.
 
 ---
 
@@ -406,7 +402,5 @@ Nothing about the application is baked into that snapshot: every build step live
 This work is a port and extension of [spdocker](https://github.com/subhadeep-banik/spdocker) by Subhadeep Banik. See `LICENSE` for the original terms.
 
 The bitsliced backends (`backends/f3`, `backends/f6`) come from [bitsliced-aes](https://github.com/conorpp/bitsliced-aes) by Conor Patrick, whose repository declares no licence.
-
-The base image derives from AMD/Xilinx's Ubuntu 22.04 IoT image for Kria and contains Canonical- and AMD-licensed components, redistributed under their respective terms.
 
 Funded by the European Union under Horizon Europe, Grant No. 101135183 (MYRTUS). Views and opinions expressed are those of the authors only and do not necessarily reflect those of the European Union.
