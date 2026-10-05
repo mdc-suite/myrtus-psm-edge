@@ -8,12 +8,12 @@ This logbook records the modifications that took **spdocker** from an x86-only p
 | **Upstream** | https://github.com/subhadeep-banik/spdocker, by Subhadeep Banik |
 | **Target hardware** | Kria KV260 — Zynq UltraScale+ MPSoC, 4× Cortex-A53, aarch64, Ubuntu 22.04 IoT |
 | **Hosts** | the board itself (native aarch64 build) · bare-metal x86-64 Linux (native amd64 build) |
-| **Base image** | [`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu) on aarch64, `ubuntu:22.04` on x86-64, chosen automatically (§8) |
-| **Status** | ✅ Validated on both architectures at `c0c0065`: eight backends registered and measured, byte-identical transfers on both security levels for files of every size, runtime switch working |
+| **Base image** | `ubuntu:22.04` on both architectures (M21, §8) |
+| **Status** | ✅ Validated on both architectures at `c0c0065`: eight backends registered and measured, byte-identical transfers on both security levels for files of every size, runtime switch working. On stock Ubuntu (M21), validated again on the board at `cff2910` |
 
 ### How to read the modifications
 
-Every modification in §3 and §4 carries a number (`M1` … `M20`), a level and the architecture it concerns.
+Every modification in §3 and §4 carries a number (`M1` … `M21`), a level and the architecture it concerns.
 
 | Level | Meaning | How it looks |
 |---|---|---|
@@ -28,7 +28,7 @@ Architecture tags: `arm` (aarch64 only), `x86` (x86-64 only), `both`.
 1. [What this project is](#1-what-this-project-is)
 2. [What was broken](#2-what-was-broken)
 3. [Baseline: making upstream run at all](#3-baseline-making-upstream-run-at-all) — M1 … M3
-4. [Port modifications](#4-port-modifications) — M4 … M20
+4. [Port modifications](#4-port-modifications) — M4 … M21
 5. [Energy measurement](#5-energy-measurement)
 6. [Status: resolved and open points](#6-status-resolved-and-open-points)
 7. [Commit map](#7-commit-map)
@@ -119,6 +119,8 @@ Grouped by theme; within each theme the most important come first. Paths are the
 > [!IMPORTANT]
 > The same `docker compose … up --build` works on the board and on x86-64, with no argument. The Dockerfile picks the base image from the architecture it is building for, and compose builds for the host.
 
+*The choice of base was superseded by M21: since `2ac6d71` both architectures build on stock `ubuntu:22.04`, from a single `FROM`. The part on `compose-server.yml` still applies. Kept for the record.*
+
 **`Dockerfile`.** The base image on the board is a snapshot of the board's own root filesystem (§8), which exists only for arm64: on x86-64 every `RUN` would fail with `exec format error`. The base is therefore chosen from `TARGETARCH`, which BuildKit sets to the architecture being built, with one stage per architecture:
 
 ```dockerfile
@@ -171,6 +173,19 @@ The Dockerfile installed `gcc` alone, which brings the compiler without the C li
 Since M12 the board measures energy through the INA260, and `profile01.c` calls `likwid-perfctr` only on x86-64; on aarch64 likwid was downloaded and compiled (M5) but never run. The Dockerfile now builds it only when the target is not `arm64`. This takes about 370 s (M6) off a clean build on the board, and with them its dependence on likwid's download server; the x86-64 build is unchanged. Checked with a clean build on both architectures: on the board the step now takes 1.4 s, on x86-64 it builds likwid as before, and `test/test.sh -all` passes on both, with energy on x86-64 still measured through likwid.
 
 </details>
+
+#### 🟡 M21 · Build on stock Ubuntu on both architectures
+`arm` · `Dockerfile` · `2ac6d71`
+
+On the board the container was built on a snapshot of the board's own root filesystem (§8), 2 GB compressed. Its first start took about 15 minutes, more than half of them to download and unpack that base onto the SD card. The component uses nothing of the Kria userspace: the INA260 is read directly from `/sys/class/hwmon` (M12), which the privileged container sees on any base, and `xmutil` is a tool of the host. Both architectures now build on stock `ubuntu:22.04`, and the stages of M4 are gone:
+
+```dockerfile
+FROM ubuntu:22.04 AS build-env
+```
+
+The two bases were compared on the board, 10 cold first starts each ([`BASEIMAGE.md`](BASEIMAGE.md), made with `tools/bench_baseimage.sh`). On stock Ubuntu the first start takes 294 s instead of 932 s and 0.82 GB of the card instead of 7.98 GB; RAM use is the same.
+
+**Validated** on the board: `test/test.sh -all` passes, and `test/test.sh` passed in all 20 runs of the comparison, with the energy of all eight backends measured through the INA260.
 
 ### 4.2 Registration pipeline
 
@@ -368,6 +383,8 @@ tools/      bench_ina260.sh, ina260_test.c
 test/       rfile
 ```
 
+Added later: `BASEIMAGE.md` at the top level, and in `tools/` the benchmark of the base image with its results (M21).
+
 The container keeps the flat `/app` the pipeline expects: the Dockerfile copies each directory into `/app` instead of `COPY . .`, so `start.sh`, `register`, `gen` and the backends' `config.txt` are unchanged. `send1.c` became `send.c`. The contents of `/app` were compared file by file with the previous image before the change. **Validated** on both architectures: eight backends registered and measured, both levels byte-identical.
 
 ### 4.7 Transfers
@@ -438,7 +455,7 @@ These follow from the choice and from the hardware; they are properties of the m
 | File sizes (18 sizes from 0 B to 1 MiB, both levels, backends and OpenSSL GCM) | 72 transfers identical, no `TAG MISMATCH` | ✅ since M17, M18 | ✅ since M17, M18 |
 | AES instructions in `/proc/cpuinfo` | `aes pmull sha1 sha2` | ✅ | n/a |
 
-The checks are those of the README (*Build and run* and *Tests*) and, for the AES instructions, of the Kria guide (§9). The x86-64 column was validated on an AMD Ryzen 5 3500U (Zen+), set up as in the README (*Build and run*, step 1).
+The checks are those of the README (*Build and run* and *Tests*) and, for the AES instructions, `grep -o 'aes\|pmull\|sha1\|sha2' /proc/cpuinfo` on the board. The x86-64 column was validated on an AMD Ryzen 5 3500U (Zen+), set up as in the README (*Build and run*, step 1).
 
 ### Resolved by the port
 
@@ -454,6 +471,7 @@ The checks are those of the README (*Build and run* and *Tests*) and, for the AE
 - **Files of every size arrive intact**, and the OpenSSL path (mode 0) works and checks the tag (M17, M18).
 - **The board no longer builds likwid**, which it never ran (M19).
 - **The container stops at once**, instead of being killed after 10 s (M20).
+- **The first start on the board is 3.2× faster** and takes a tenth of the space on the card, on stock Ubuntu (M21).
 
 ### Open points
 
@@ -496,21 +514,27 @@ Each modification with the commits that implement it. `git log --oneline main` g
 | 🟡 M18 · OpenSSL path (mode 0) | `7440efc` |
 | 🟢 M19 · likwid on x86-64 only | `52c6544` |
 | 🟢 M20 · Stop at once (`init: true`) | `6890ce2` |
+| 🟡 M21 · Stock Ubuntu on both architectures | `2ac6d71` |
 | Base image snapshot (§8) | `66baa82` |
+| Base image comparison (`BASEIMAGE.md`) | `0332b83`, `cff2910`, `89823a9`, `adce4d2` |
 
 ---
 
 ## 8. Base image
 
-On aarch64 the container is built on **[`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu)**, a snapshot of the board's own root filesystem published on Docker Hub (`linux/arm64/v8`, ~2 GB compressed). On x86-64 it is built on stock `ubuntu:22.04`, the same release. The Dockerfile chooses between them from the architecture being built (M4).
+Since `2ac6d71` (M21) the container is built on stock **`ubuntu:22.04`** on both architectures. Until then, on aarch64, it was built on **[`al3monni/kria-ubuntu:22.04.5`](https://hub.docker.com/r/al3monni/kria-ubuntu)**, a snapshot of the board's own root filesystem published on Docker Hub (`linux/arm64/v8`, ~2 GB compressed), chosen from the architecture being built (M4). The snapshot is described below for the record; the image is still on Docker Hub.
 
-### Why a snapshot of the board
+### Why a snapshot of the board was used
 
-Stock Ubuntu 22.04 and AMD's Ubuntu 22.04 IoT image for Kria are the same distribution with a different userspace: the Kria image carries board-specific tooling, such as `xmutil` and the platform-statistics utilities, useful for checking the power sensor (M12). Building on a snapshot of the board also makes the container independent of whatever happens to be installed on the board at build time, so the toolchain survives a reflash.
+Stock Ubuntu 22.04 and AMD's Ubuntu 22.04 IoT image for Kria are the same distribution with a different userspace: the Kria image carries board-specific tooling, such as `xmutil` and the platform-statistics utilities, useful for checking the power sensor (M12). Building on a snapshot of the board also made the container independent of whatever happened to be installed on the board at build time.
 
-### How the image is produced
+### Why it was dropped
 
-The root filesystem is archived from a **freshly flashed and fully upgraded board, before Docker is installed**. The order matters: a board with Docker already running carries an image store that would otherwise end up inside the snapshot.
+Its first start was slow and it filled the card, while the component uses none of its tooling. M21 summarises the change, [`BASEIMAGE.md`](BASEIMAGE.md) has the measurements.
+
+### How the image was produced
+
+The root filesystem was archived from a **freshly flashed and fully upgraded board, before Docker is installed**. The order matters: a board with Docker already running carries an image store that would otherwise end up inside the snapshot.
 
 ```bash
 sudo tar -cpf /home/ubuntu/kria-rootfs.tar \
@@ -543,8 +567,8 @@ docker run --rm al3monni/kria-ubuntu:22.04.5 sh -c 'ls -ld /tmp /run && apt-get 
 
 The last line is the real test: it exercises exactly the path that failed on the first attempt.
 
-### Using it
+### How it was used
 
-Treat the snapshot as a frozen, versioned base. Every application build step belongs in the tracked `Dockerfile` on top of it; nothing gets baked into the snapshot, or the build stops being reproducible from source. The tag carries the Ubuntu point release, so a future refresh gets a new tag instead of silently replacing this one.
+The snapshot was treated as a frozen, versioned base. Every application build step lived in the tracked `Dockerfile` on top of it; nothing was baked into the snapshot, so the build stayed reproducible from source. The tag carries the Ubuntu point release, so a refresh would get a new tag instead of silently replacing this one.
 
 > **Provenance.** Derived from AMD/Xilinx's Ubuntu 22.04 IoT image for Kria; contains Canonical- and AMD-licensed components, redistributed under their respective terms.
