@@ -62,13 +62,13 @@ first_start_s,build_s,container_start_s,base_download_s,base_extract_s,apt_s,com
 ram_idle_mb,cpu_idle_pct,samples,cpu_mean_pct,cpu_peak_pct,cpu_core_s,iowait_mean_pct,iowait_peak_pct,\
 ram_mean_mb,ram_mean_pct,ram_peak_mb,ram_peak_pct,base_disk_mb,base_content_mb,\
 image_disk_mb,image_content_mb,container_rw_mb,container_virtual_mb,build_cache_mb,\
-tests_rc,tests_pass,tests_fail"
+disk_delta_mb,tests_rc,tests_pass,tests_fail"
 # what --summary aggregates: every measured column
 METRICS="first_start_s build_s container_start_s base_download_s base_extract_s apt_s compile_s \
 export_s ram_idle_mb cpu_idle_pct samples cpu_mean_pct cpu_peak_pct cpu_core_s iowait_mean_pct iowait_peak_pct \
 ram_mean_mb ram_mean_pct ram_peak_mb ram_peak_pct repo_kb repo_nogit_kb base_disk_mb \
 base_content_mb image_disk_mb image_content_mb container_rw_mb container_virtual_mb \
-build_cache_mb tests_pass tests_fail"
+build_cache_mb disk_delta_mb tests_pass tests_fail"
 
 while [ $# -gt 0 ]; do
     case $1 in
@@ -170,6 +170,11 @@ emit() {           # append the current run to the CSV, in header order
     echo "${line%,}" >> "$CSV"
 }
 
+disk_used_mb() {   # used space, in MB, on the filesystem of Docker's data
+    df -k --output=used "$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /)" |
+        awk 'NR == 2 { printf "%.0f", $1 * 1.024 / 1000 }'
+}
+
 valid() {          # valid runs of a configuration so far
     awk -F, -v c="$1" 'NR == 1 { for (i = 1; i <= NF; i++) h[$i] = i; next }
                        $h["config"] == c && $h["status"] == "ok"' "$CSV" | wc -l
@@ -220,7 +225,7 @@ server_up() {      # wait for the banner's last line, "options:", as test/test.s
 # --- one run --------------------------------------------------------------------------
 
 run_once() {       # run_once <config> <run> <attempt>: one cold first start, one CSV row
-    local cfg=$1 run=$2 from base dir rc t0 t1 tc created sz
+    local cfg=$1 run=$2 from base dir rc t0 t1 tc created sz disk0
     case $cfg in
         stock) from=$STOCK_FROM ;;
         kria)  from=$KRIA_FROM ;;
@@ -254,6 +259,7 @@ run_once() {       # run_once <config> <run> <attempt>: one cold first start, on
     # --- the measurement: from the launch of compose to its return
     log "run $run: cooldown $COOLDOWN_S s, then first start"
     sleep "$COOLDOWN_S"
+    disk0=$(disk_used_mb)
     sync; echo 3 | sudo -n tee /proc/sys/vm/drop_caches >/dev/null
     vmstat -n -t -S M 1 > "$dir/vmstat.log" &
     vm_pid=$!
@@ -300,6 +306,9 @@ run_once() {       # run_once <config> <run> <attempt>: one cold first start, on
     for k in image_disk_mb image_content_mb build_cache_mb base_disk_mb base_content_mb; do
         R[$k]=$(to_mb "${R[$k]}")
     done
+    # what the first start really wrote to the SD card: the sizes above overlap (the build
+    # cache shares its snapshots with the image), the filesystem does not double count
+    R[disk_delta_mb]=$(( $(disk_used_mb) - disk0 ))
 
     # --- functional check
     log "run $run: server up, running test/test.sh"
