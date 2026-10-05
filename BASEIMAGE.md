@@ -50,11 +50,6 @@ From the BuildKit output of the same runs, in seconds, mean ± standard deviatio
 | Container start | 16.9 ± 5.1 | 19.2 ± 0.7 |
 | **Total** | **931.9 ± 19.0** | **294.1 ± 4.3** |
 
-Two runs need a note; neither changes its total:
-
-- **Run 13 (stock).** BuildKit did not print the closing `done` line of the layer download, so the CSV has 0.0 s. The progress lines show the 27.7 MB layer downloaded in 1.2 s, the value used above.
-- **Run 6 (Kria).** About 12 s moved from the container start (4.3 s instead of ~17) to the export (89.2 s instead of ~77): probably an operation that usually runs when the container is created ran during the export instead. The boundary between build and container start is therefore not stable; the total is. Without run 6 the container start is 18.3 s for Kria, close to the 19.2 s of stock.
-
 ### 1.3 Reading the results
 
 - **The first start is storage-bound, not CPU-bound.** With the Kria base, downloading and unpacking the 2 GB base takes 491 s, 53 % of the first start; the extraction onto the SD card alone takes 386 s. During it the cores are mostly waiting on the disk: I/O wait averages 24 %, with peaks of 93 % on average.
@@ -133,11 +128,3 @@ The computations are in `vmstat_stats()`, `build_phases()` and `summary()` of th
 ### 3.4 Functional check
 
 In all 20 runs `test/test.sh` passed its 8 tests: eight backends registered and measured, every energy figure in `db.yaml` non-zero (INA260 readings), both ports listening, round trip on both security levels. Before the campaign, `test/test.sh -all` had also passed in full on the stock base, runtime switch and file sizes included.
-
-## 4. Changes from the first version
-
-The first version of this report was based on one run per configuration. The campaign revises three of its figures:
-
-- **First start: 3.2×, not 3.6×.** The single Kria run (1044 s, extraction 467 s) was slower than all ten of the campaign (917–982 s, extraction 361–443 s).
-- **Container writable layer: 4.4 MB on both bases.** The stock value of the first version (512 kB) had been read before the server finished starting; at the same point both are 4.4 MB.
-- **Space on storage: 7.98 GB and 821 MB, measured.** The first version added image and build cache (15.4 GB and 1.0 GB), which share their snapshots.
